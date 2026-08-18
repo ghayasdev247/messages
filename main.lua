@@ -32,6 +32,8 @@ local isPolling = false
 local publicFeedMessages = {}
 local onlineUsersList = {}
 local privateChatHistory = {} -- Keyed by username
+local lastPublicMessageCount = 0
+local lastPrivateMessageCount = 0
 
 -- --------------------------------------------------------------------
 -- JSON & HTTP UTILITIES
@@ -546,6 +548,14 @@ function fetchPublicFeedMessages()
     if code == 200 then
       local res = decodeJSON(content)
       if res and res.messages then
+        local newCount = #res.messages
+        if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
+          local latest = res.messages[newCount]
+          if latest and latest.sender ~= currentUser.name then
+            announce("New public message from " .. latest.sender .. ": " .. latest.text)
+          end
+        end
+        lastPublicMessageCount = newCount
         publicFeedMessages = res.messages
         if activeScreen == "public_feed" then
           updatePublicFeedUI()
@@ -603,13 +613,14 @@ function showPrivateDirectoryScreen()
   fetchOnlineUsersList()
   
   btnRefreshUsers.onClick = function()
-    announce("Refreshing online users directory...")
+    announce("Refreshing user directory...")
     fetchOnlineUsersList()
   end
 end
 
 function fetchOnlineUsersList()
-  Http.get(BACKEND_URL .. "/api/online-users", function(code, content)
+  local url = BACKEND_URL .. "/api/online-users?user=" .. currentUser.name
+  Http.get(url, function(code, content)
     if code == 200 then
       local res = decodeJSON(content)
       if res and res.users then
@@ -646,7 +657,11 @@ function updatePrivateDirectoryUI()
   
   local data = {}
   for i, u in ipairs(onlineUsersList) do
-    table.insert(data, { itemName = u.name, itemStatus = u.status })
+    local statusText = u.status or "Online"
+    table.insert(data, { 
+      itemName = u.name, 
+      itemStatus = "● " .. statusText 
+    })
   end
   
   local adapter = LuaAdapter(activity, data, itemLayout)
@@ -665,6 +680,7 @@ end
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
   activeChatTarget = targetUsername
+  lastPrivateMessageCount = 0
   activity.setContentView(loadlayout(chatLayout))
   
   txtChatTargetHeader.setText("Private: " .. targetUsername)
@@ -705,6 +721,14 @@ function fetchPrivateChatThread(targetUsername)
     if code == 200 then
       local res = decodeJSON(content)
       if res and res.messages then
+        local newCount = #res.messages
+        if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
+          local latest = res.messages[newCount]
+          if latest and latest.sender == targetUsername then
+            announce("New private message from " .. targetUsername .. ": " .. latest.text)
+          end
+        end
+        lastPrivateMessageCount = newCount
         privateChatHistory[targetUsername] = res.messages
         if activeScreen == "private_chat" and activeChatTarget == targetUsername then
           updatePrivateChatUI(targetUsername)

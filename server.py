@@ -2,6 +2,7 @@
 Chatify Accessible Messenger Backend Server
 Built with Python standard library (http.server + sqlite3)
 Zero external dependencies required.
+Supports online/offline status, public feed, 1-on-1 private messaging, and CORS.
 """
 
 import http.server
@@ -71,7 +72,6 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             try:
                 return json.loads(body)
             except json.JSONDecodeError:
-                # Fallback for form-urlencoded or plain text
                 parsed = urllib.parse.parse_qs(body)
                 return {k: v[0] for k, v in parsed.items()}
         return {}
@@ -182,11 +182,22 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"success": True, "messages": messages}).encode("utf-8"))
 
         elif path == "/api/online-users":
-            # Active in the last 5 minutes (300 seconds)
-            cutoff = now_ts - 300
-            cursor.execute("SELECT username FROM users WHERE last_seen >= ? ORDER BY username ASC", (cutoff,))
+            current_user = query.get("user", [""])[0].strip()
+            # Users active in the last 120 seconds are marked "Online", others "Offline"
+            cursor.execute("SELECT username, last_seen FROM users ORDER BY last_seen DESC")
             rows = cursor.fetchall()
-            users = [{"name": r[0], "status": "Online"} for r in rows]
+            
+            users = []
+            for r in rows:
+                username = r[0]
+                last_seen = r[1]
+                if username == current_user:
+                    continue  # Exclude self from messaging target list
+                
+                is_online = (now_ts - last_seen) <= 120
+                status_str = "Online" if is_online else "Offline"
+                users.append({"name": username, "status": status_str, "online": is_online})
+            
             self._set_headers(200)
             self.wfile.write(json.dumps({"success": True, "users": users}).encode("utf-8"))
 
