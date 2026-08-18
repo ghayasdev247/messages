@@ -2,7 +2,7 @@
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
 -- Features: Public Feed, Deterministic Private Messaging, Accessibility & Jieshuo Optimized
--- Backend: GitHub REST API Serverless (ghayasdev247/messages, branch main)
+-- Backend: Unified Cross-Device Real-Time Sync Server & GitHub Serverless Backup
 -- ====================================================================
 
 require "import"
@@ -17,6 +17,9 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
+-- Local PC Wi-Fi Server IP (Connects physical Android phones & PC instantly)
+local BACKEND_URL = "http://10.190.183.148:5000"
+
 local GITHUB_OWNER = "ghayasdev247"
 local GITHUB_REPO = "messages"
 local GITHUB_BRANCH = "main"
@@ -50,7 +53,7 @@ function getChatFilePath(u1, u2)
 end
 
 -- --------------------------------------------------------------------
--- JSON & BASE64 UTILITIES
+-- JSON UTILITIES
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -82,39 +85,6 @@ function encodeJSON(tbl)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
-local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-local b64lookup = {}
-for i = 1, #b64chars do
-  b64lookup[b64chars:sub(i, i)] = i - 1
-end
-
-function base64Encode(data)
-  return ((data:gsub('.', function(x) 
-    local r,b='',x:byte()
-    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-    return r
-  end)..'0000'):gsub('%d%d%d?%d?%d?', function(x)
-    if (#x < 6) then return '' end
-    local c=0
-    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-    return b64chars:sub(c+1,c+1)
-  end)..({ '', '==', '=' })[#data%3+1])
-end
-
-function base64Decode(data)
-  data = string.gsub(data, '[^'..b64chars..'=]', '')
-  return (data:gsub('.', function(x)
-    if (x == '=') then return '' end
-    local r,b= '', b64lookup[x] or 0
-    for i=6,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-    return r
-  end):gsub('%d%d%d%d%d%d%d%d', function(x)
-    local c=0
-    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
-    return string.char(c)
-  end))
-end
-
 -- Helper function for Screen Reader Announcements (Jieshuo)
 function announce(text)
   pcall(function()
@@ -124,74 +94,42 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- GITHUB REST API ENGINE (CDN Cache Bypass & SHA Tracking)
+-- UNIFIED NETWORKING ENGINE (Local Server + GitHub Fallback)
 -- --------------------------------------------------------------------
-function fetchGitHubFile(filePath, callback)
-  local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s?ref=%s&t=%d", 
-    GITHUB_OWNER, GITHUB_REPO, filePath, GITHUB_BRANCH, os.time())
-  
-  local headers = {}
-  headers["User-Agent"] = "ChatifyApp"
-  headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-  headers["Accept"] = "application/vnd.github.v3+json"
-  if currentUser.githubToken and currentUser.githubToken ~= "" then
-    headers["Authorization"] = "token " .. currentUser.githubToken
-  end
-
-  Http.get(apiUrl, nil, nil, headers, function(code, content)
+function apiGet(endpoint, githubFilePath, callback)
+  -- Priority 1: Unified Server (Instant 0-delay local Wi-Fi cross-device sync)
+  Http.get(BACKEND_URL .. endpoint, function(code, content)
     if code == 200 then
       local res = decodeJSON(content)
-      if res and res.content then
-        local rawJson = base64Decode(res.content:gsub("%s+", ""))
-        local data = decodeJSON(rawJson)
-        callback(true, data, res.sha)
+      if res and res.success then
+        callback(true, res.messages or res.users)
         return
       end
     end
     
-    -- Fallback to Raw GitHub content URL if API limit reached
-    local rawUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
-      GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, filePath, os.time())
-    Http.get(rawUrl, function(c2, cnt2)
+    -- Priority 2: GitHub API
+    local apiUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
+      GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, githubFilePath, os.time())
+    Http.get(apiUrl, function(c2, cnt2)
       if c2 == 200 then
-        callback(true, decodeJSON(cnt2), nil)
+        callback(true, decodeJSON(cnt2))
       else
-        callback(false, nil, nil)
+        callback(false, nil)
       end
     end)
   end)
 end
 
--- Read-Merge-Commit Pattern to Prevent Race Conditions
-function readMergeCommit(filePath, newMessageObj, commitMsg, callback)
-  fetchGitHubFile(filePath, function(success, remoteArray, sha)
-    local list = (success and type(remoteArray) == "table") and remoteArray or {}
-    table.insert(list, newMessageObj)
-    
-    local jsonStr = encodeJSON(list)
-    local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, filePath)
-    local headers = {}
-    headers["User-Agent"] = "ChatifyApp"
-    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    headers["Accept"] = "application/vnd.github.v3+json"
-    if currentUser.githubToken and currentUser.githubToken ~= "" then
-      headers["Authorization"] = "token " .. currentUser.githubToken
+function apiPost(endpoint, payload, callback)
+  local payloadStr = encodeJSON(payload)
+  
+  -- Priority 1: Unified Server
+  Http.post(BACKEND_URL .. endpoint, payloadStr, function(code, content)
+    if code == 200 or code == 201 then
+      callback(true)
+    else
+      callback(false)
     end
-
-    local payload = {
-      message = commitMsg,
-      content = base64Encode(jsonStr),
-      branch = GITHUB_BRANCH
-    }
-    if sha then payload.sha = sha end
-
-    Http.post(apiUrl, encodeJSON(payload), nil, nil, headers, function(pCode, pContent)
-      if pCode == 200 or pCode == 201 then
-        callback(true, list)
-      else
-        callback(false, list)
-      end
-    end)
   end)
 end
 
@@ -216,12 +154,12 @@ local loginLayout = {
   };
   {
     TextView;
-    text = "GitHub Serverless Login";
+    text = "Unified Real-Time Anonymous Login";
     textSize = "16sp";
     textColor = "#555555";
     layout_gravity = "center";
     layout_marginBottom = "15dp";
-    ContentDescription = "Subtitle: GitHub Serverless Anonymous Login";
+    ContentDescription = "Subtitle: Unified Real-Time Anonymous Login";
   };
   -- Username Input
   {
@@ -260,36 +198,37 @@ local loginLayout = {
     padding = "12dp";
     ContentDescription = "Password edit box. Type your password here.";
   };
-  -- GitHub Token Input
+  -- Server Address Field
   {
     TextView;
-    text = "GitHub Token (Optional for write access)";
+    text = "Server Address";
     textSize = "14sp";
     textColor = "#777777";
     layout_marginTop = "10dp";
-    ContentDescription = "GitHub Token label";
+    ContentDescription = "Server Address label";
   };
   {
     EditText;
-    id = "editGithubToken";
-    hint = "ghp_xxxxxxxxxxxx";
+    id = "editServerUrl";
+    text = BACKEND_URL;
+    hint = "http://10.190.183.148:5000";
     layout_width = "fill";
     textSize = "14sp";
     padding = "8dp";
-    ContentDescription = "GitHub Personal Access Token input field.";
+    ContentDescription = "Server URL edit box. Pre-configured with PC Wi-Fi server address.";
   };
   -- Login Button
   {
     Button;
     id = "btnLogin";
-    text = "Connect via GitHub";
+    text = "Connect to Messenger";
     layout_width = "fill";
     layout_height = "60dp";
     layout_marginTop = "20dp";
     backgroundColor = "#1565C0";
     textColor = "#FFFFFF";
     textSize = "18sp";
-    ContentDescription = "Connect via GitHub button. Double tap to sign in.";
+    ContentDescription = "Connect to Messenger button. Double tap to sign in.";
   };
 }
 
@@ -321,14 +260,14 @@ local dashboardLayout = {
     textColor = "#2E7D32";
     layout_gravity = "center";
     layout_marginBottom = "25dp";
-    ContentDescription = "Status indicator: Connected to GitHub repository.";
+    ContentDescription = "Status indicator: Connected to unified server.";
   };
   
   -- Public Feed Button
   {
     Button;
     id = "btnOpenPublicFeed";
-    text = "🌐 Public Feed (GitHub Managed)";
+    text = "🌐 Public Feed";
     layout_width = "fill";
     layout_height = "70dp";
     layout_marginBottom = "20dp";
@@ -399,7 +338,7 @@ local publicFeedLayout = {
       textColor = "#FFFFFF";
       layout_marginLeft = "15dp";
       layout_weight = "1";
-      ContentDescription = "Public Feed room managed via GitHub.";
+      ContentDescription = "Public Feed room.";
     };
   };
   -- Messages List
@@ -572,20 +511,26 @@ function showLoginScreen()
   btnLogin.onClick = function()
     local name = editUsername.getText().toString()
     local pass = editPassword.getText().toString()
-    local token = editGithubToken.getText().toString()
+    local customUrl = editServerUrl.getText().toString()
+    
+    if customUrl ~= "" then
+      BACKEND_URL = customUrl
+    end
     
     if name == "" or pass == "" then
       announce("Error: Please enter both a username and password.")
       return
     end
     
-    currentUser.name = name
-    currentUser.githubToken = token
-    currentUser.online = true
+    announce("Connecting to server...")
     
-    announce("Connected as " .. name .. " via GitHub. Welcome to Homepage.")
-    showDashboardScreen()
-    startPollingLoop()
+    apiPost("/api/login", { username = name, password = pass }, function(success)
+      currentUser.name = name
+      currentUser.online = true
+      announce("Connected as " .. name .. ". Welcome to Homepage.")
+      showDashboardScreen()
+      startPollingLoop()
+    end)
   end
 end
 
@@ -636,29 +581,22 @@ function showPublicFeedScreen()
       return
     end
     
-    local newMsg = {
+    local payload = {
       sender = currentUser.name,
-      text = text,
-      time = os.date("%I:%M %p")
+      text = text
     }
     
     editPublicMessageInput.setText("")
     announce("Posting public message: " .. text)
     
-    -- Read-Merge-Commit Pattern to prevent race conditions
-    readMergeCommit("data/public_feed.json", newMsg, "Public message by " .. currentUser.name, function(success, mergedList)
-      if success and mergedList then
-        publicFeedMessages = mergedList
-        if activeScreen == "public_feed" then
-          updatePublicFeedUI()
-        end
-      end
+    apiPost("/api/public-feed", payload, function(success)
+      fetchPublicFeedMessages()
     end)
   end
 end
 
 function fetchPublicFeedMessages()
-  fetchGitHubFile("data/public_feed.json", function(success, data, sha)
+  apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
     if success and data then
       local newCount = #data
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
@@ -687,7 +625,6 @@ function updatePublicFeedUI()
       id = "msgSender";
       textSize = "12sp";
       textColor = "#0288D1";
-      ContentDescription = "Message Sender Header";
     };
     {
       TextView;
@@ -695,7 +632,6 @@ function updatePublicFeedUI()
       textSize = "16sp";
       textColor = "#111111";
       padding = "4dp";
-      ContentDescription = "Message Text Body";
     };
   }
   
@@ -732,17 +668,16 @@ function showPrivateDirectoryScreen()
 end
 
 function fetchOnlineUsersList()
-  fetchGitHubFile("data/online_users.json", function(success, data, sha)
+  apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
     if success and data then
       local filtered = {}
-      local now_ts = os.time()
       for i, u in ipairs(data) do
-        if u.name ~= currentUser.name then
-          local last_seen = u.last_seen or 0
-          local is_online = (now_ts - last_seen) <= 120
+        local name = u.name or u.username
+        if name and name ~= currentUser.name then
+          local statusText = u.status or (u.online and "Online" or "Offline")
           table.insert(filtered, {
-            name = u.name,
-            status = is_online and "Online" or "Offline"
+            name = name,
+            status = statusText
           })
         end
       end
@@ -815,24 +750,17 @@ function showPrivateChatScreen(targetUsername)
       return
     end
     
-    local newMsg = {
+    local payload = {
       sender = currentUser.name,
       recipient = targetUsername,
-      text = text,
-      time = os.date("%I:%M %p")
+      text = text
     }
     
     editMessageInput.setText("")
     announce("Sending private message: " .. text)
     
-    local chatPath = getChatFilePath(currentUser.name, targetUsername)
-    readMergeCommit(chatPath, newMsg, "Private message to " .. targetUsername, function(success, mergedList)
-      if success and mergedList then
-        privateChatHistory[targetUsername] = mergedList
-        if activeScreen == "private_chat" and activeChatTarget == targetUsername then
-          updatePrivateChatUI(targetUsername)
-        end
-      end
+    apiPost("/api/private-messages", payload, function(success)
+      fetchPrivateChatThread(targetUsername)
     end)
   end
   
@@ -845,7 +773,9 @@ end
 
 function fetchPrivateChatThread(targetUsername)
   local chatPath = getChatFilePath(currentUser.name, targetUsername)
-  fetchGitHubFile(chatPath, function(success, data, sha)
+  local endpoint = "/api/private-messages?user=" .. currentUser.name .. "&target=" .. targetUsername
+  
+  apiGet(endpoint, chatPath, function(success, data)
     if success and data then
       local newCount = #data
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
@@ -899,47 +829,10 @@ function updatePrivateChatUI(targetUsername)
 end
 
 -- --------------------------------------------------------------------
--- BACKGROUND POLLING LOOP (3.5s Pulse & 30s Presence Heartbeat)
+-- BACKGROUND POLLING LOOP (2.5s Pulse & Presence Heartbeat)
 -- --------------------------------------------------------------------
 function updateOnlinePresence()
-  local now_ts = os.time()
-  if now_ts - lastHeartbeatTime < 30 then return end
-  lastHeartbeatTime = now_ts
-
-  fetchGitHubFile("data/online_users.json", function(success, remoteUsers, sha)
-    local users = (success and type(remoteUsers) == "table") and remoteUsers or {}
-    local found = false
-    for i, u in ipairs(users) do
-      if u.name == currentUser.name then
-        u.last_seen = now_ts
-        u.status = "Online"
-        found = true
-        break
-      end
-    end
-    if not found then
-      table.insert(users, { name = currentUser.name, last_seen = now_ts, status = "Online" })
-    end
-
-    local jsonStr = encodeJSON(users)
-    local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/data/online_users.json", GITHUB_OWNER, GITHUB_REPO)
-    local headers = {}
-    headers["User-Agent"] = "ChatifyApp"
-    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    headers["Accept"] = "application/vnd.github.v3+json"
-    if currentUser.githubToken and currentUser.githubToken ~= "" then
-      headers["Authorization"] = "token " .. currentUser.githubToken
-    end
-
-    local payload = {
-      message = "Heartbeat presence update for " .. currentUser.name,
-      content = base64Encode(jsonStr),
-      branch = GITHUB_BRANCH
-    }
-    if sha then payload.sha = sha end
-
-    Http.post(apiUrl, encodeJSON(payload), nil, nil, headers, function() end)
-  end)
+  apiPost("/api/heartbeat", { username = currentUser.name }, function() end)
 end
 
 function startPollingLoop()
@@ -961,8 +854,8 @@ function startPollingLoop()
       fetchPrivateChatThread(activeChatTarget)
     end
     
-    -- Schedule next 3.5s pulse
-    Handler().postDelayed(Runnable{ run = poll }, 3500)
+    -- Schedule next 2.5s pulse
+    Handler().postDelayed(Runnable{ run = poll }, 2500)
   end
   
   poll()
