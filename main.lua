@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.0.9 (Build Code: 10)
--- Features: Firebase Realtime Database + GitHub Serverless + Local PC REST API
--- Networking: Triple Redundant Cloud Sync (Firebase RTDB, GitHub API, Local Server)
+-- Version: 1.1.0 (Build Code: 11)
+-- Features: Firebase Realtime Database ('messages-server') + GitHub Serverless
+-- Networking: Firebase Project Cloud Engine with GitHub REST API Fallback
 -- ====================================================================
 
 require "import"
@@ -18,15 +18,18 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.9"
-local APP_VERSION_CODE = 10
+local APP_VERSION = "1.1.0"
+local APP_VERSION_CODE = 11
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
 local XPK_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk"
 
--- Firebase Realtime Database Endpoint
-local FIREBASE_URL = "https://chatify-accessible-default-rtdb.firebaseio.com"
+-- User's Firebase Project Configuration
+local FIREBASE_PROJECT_ID = "messages-server"
+local FIREBASE_URL = "https://messages-server-default-rtdb.firebaseio.com"
+local FIREBASE_ALT_URL = "https://messages-server.firebaseio.com"
+local FIREBASE_ASIA_URL = "https://messages-server-default-rtdb.asia-southeast1.firebasedatabase.app"
 
 -- Active PC Wi-Fi Server IP
 local BACKEND_URL = "http://10.20.244.148:5000"
@@ -291,35 +294,76 @@ function saveUpdateFile(versionStr, uContent)
 end
 
 -- --------------------------------------------------------------------
--- TRIPLE REDUNDANT NETWORKING ENGINE (Local API + Firebase RTDB + GitHub)
+-- UNIFIED NETWORKING ENGINE (Firebase 'messages-server' + GitHub + Local)
 -- --------------------------------------------------------------------
-function apiGet(endpoint, githubFilePath, callback)
-  -- Priority 1: Local PC Server
-  Http.get(BACKEND_URL .. endpoint, function(code, content)
-    if code == 200 then
-      local res = decodeJSON(content)
-      if res and (res.success or res.messages or res.users) then
-        callback(true, res.messages or res.users or res)
+function fetchFirebaseData(path, callback)
+  local fbPath = path:gsub("%.json$", "")
+  local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
+  
+  Http.get(fbUrl, function(code, content)
+    if code == 200 and content and content ~= "null" then
+      local fbData = decodeJSON(content)
+      if fbData then
+        local list = {}
+        if fbData[1] ~= nil then
+          list = fbData
+        else
+          for _, v in pairs(fbData) do
+            table.insert(list, v)
+          end
+        end
+        callback(true, list)
         return
       end
     end
     
-    -- Priority 2: Firebase Realtime Database REST API
-    local fbPath = githubFilePath:gsub("%.json$", "")
-    local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
-    Http.get(fbUrl, function(fCode, fContent)
-      if fCode == 200 and fContent and fContent ~= "null" then
-        local fbData = decodeJSON(fContent)
+    -- Try Alt Firebase URL
+    local altUrl = FIREBASE_ALT_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
+    Http.get(altUrl, function(aCode, aContent)
+      if aCode == 200 and aContent and aContent ~= "null" then
+        local fbData = decodeJSON(aContent)
         if fbData then
           local list = {}
-          if fbData[1] ~= nil then
-            list = fbData
-          else
-            for _, v in pairs(fbData) do
-              table.insert(list, v)
-            end
-          end
+          if fbData[1] ~= nil then list = fbData else for _, v in pairs(fbData) do table.insert(list, v) end end
           callback(true, list)
+          return
+        end
+      end
+      callback(false, nil)
+    end)
+  end)
+end
+
+function postFirebaseData(path, payload, callback)
+  local fbPath = path:gsub("%.json$", "")
+  local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json"
+  local payloadStr = encodeJSON(payload)
+  
+  Http.post(fbUrl, payloadStr, function(code, content)
+    if code == 200 or code == 201 then
+      if callback then callback(true) end
+    else
+      Http.post(FIREBASE_ALT_URL .. "/" .. fbPath .. ".json", payloadStr, function(aCode, aContent)
+        if (aCode == 200 or aCode == 201) and callback then callback(true) else callback(false) end
+      end)
+    end
+  end)
+end
+
+function apiGet(endpoint, githubFilePath, callback)
+  -- Priority 1: Firebase Realtime Database ('messages-server')
+  fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
+    if fbSuccess and fbData and #fbData > 0 then
+      callback(true, fbData)
+      return
+    end
+    
+    -- Priority 2: Local PC Server
+    Http.get(BACKEND_URL .. endpoint, function(code, content)
+      if code == 200 then
+        local res = decodeJSON(content)
+        if res and (res.success or res.messages or res.users) then
+          callback(true, res.messages or res.users or res)
           return
         end
       end
@@ -336,82 +380,84 @@ function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
   local headers = { ["Content-Type"] = "application/json" }
 
-  -- Priority 1: Local PC Server
-  Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function(code, content)
-    if code == 200 or code == 201 then
-      if callback then callback(true) end
-    else
-      -- Priority 2 & 3: Dual Sync to Firebase Realtime Database + GitHub Serverless
-      if string.find(endpoint, "/api/public%-feed") then
-        local msgObj = {
-          sender = payload.sender or currentUser.name,
-          text = payload.text,
-          time = payload.time or os.date("%I:%M %p")
-        }
-        -- Post to Firebase Realtime Database
-        Http.post(FIREBASE_URL .. "/data/public_feed.json", encodeJSON(msgObj), function() end)
-        
-        -- Commit to GitHub
-        fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
-          local feedToSave = currentFeed or {}
-          table.insert(feedToSave, msgObj)
-          commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
-        end)
+  -- Multi-Sync to Firebase 'messages-server' + GitHub + Local
+  if string.find(endpoint, "/api/public%-feed") then
+    local msgObj = {
+      sender = payload.sender or currentUser.name,
+      text = payload.text,
+      time = payload.time or os.date("%I:%M %p")
+    }
+    
+    -- Post to Firebase 'messages-server'
+    postFirebaseData("data/public_feed", msgObj, function(fbOk) end)
+    
+    -- Post to Local PC Server
+    Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
+    
+    -- Commit to GitHub
+    fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
+      local feedToSave = currentFeed or {}
+      table.insert(feedToSave, msgObj)
+      commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
+    end)
 
-      elseif string.find(endpoint, "/api/private%-messages") then
-        local msgObj = {
-          sender = payload.sender or currentUser.name,
-          recipient = payload.recipient,
-          text = payload.text,
-          time = payload.time or os.date("%I:%M %p")
-        }
-        local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-        local fbPath = filePath:gsub("%.json$", "")
-        
-        -- Post to Firebase Realtime Database
-        Http.post(FIREBASE_URL .. "/" .. fbPath .. ".json", encodeJSON(msgObj), function() end)
-        
-        -- Commit to GitHub
-        fetchGitHubFile(filePath, function(ok, currentThread)
-          local threadToSave = currentThread or {}
-          table.insert(threadToSave, msgObj)
-          commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
-        end)
+  elseif string.find(endpoint, "/api/private%-messages") then
+    local msgObj = {
+      sender = payload.sender or currentUser.name,
+      recipient = payload.recipient,
+      text = payload.text,
+      time = payload.time or os.date("%I:%M %p")
+    }
+    local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
+    
+    -- Post to Firebase 'messages-server'
+    postFirebaseData(filePath, msgObj, function(fbOk) end)
+    
+    -- Post to Local PC Server
+    Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
+    
+    -- Commit to GitHub
+    fetchGitHubFile(filePath, function(ok, currentThread)
+      local threadToSave = currentThread or {}
+      table.insert(threadToSave, msgObj)
+      commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
+    end)
 
-      elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
-        local username = payload.username or currentUser.name
-        if username and username ~= "" then
-          local now_ts = os.time()
-          local userObj = { name = username, last_seen = now_ts, status = "Online" }
-          
-          -- Put to Firebase Realtime Database
-          Http.put(FIREBASE_URL .. "/data/online_users/" .. username .. ".json", encodeJSON(userObj), function() end)
-          
-          -- Commit to GitHub
-          fetchGitHubFile("data/online_users.json", function(ok, userList)
-            local list = userList or {}
-            local found = false
-            for _, u in ipairs(list) do
-              if u.name == username then
-                u.last_seen = now_ts
-                u.status = "Online"
-                found = true
-                break
-              end
-            end
-            if not found then
-              table.insert(list, userObj)
-            end
-            commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
-          end)
-        else
-          if callback then callback(false) end
+  elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
+    local username = payload.username or currentUser.name
+    if username and username ~= "" then
+      local now_ts = os.time()
+      local userObj = { name = username, last_seen = now_ts, status = "Online" }
+      
+      -- Put to Firebase 'messages-server'
+      postFirebaseData("data/online_users", userObj, function() end)
+      
+      -- Post to Local PC Server
+      Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
+      
+      -- Commit to GitHub
+      fetchGitHubFile("data/online_users.json", function(ok, userList)
+        local list = userList or {}
+        local found = false
+        for _, u in ipairs(list) do
+          if u.name == username then
+            u.last_seen = now_ts
+            u.status = "Online"
+            found = true
+            break
+          end
         end
-      else
-        if callback then callback(false) end
-      end
+        if not found then
+          table.insert(list, userObj)
+        end
+        commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
+      end)
+    else
+      if callback then callback(false) end
     end
-  end)
+  else
+    if callback then callback(false) end
+  end
 end
 
 -- --------------------------------------------------------------------
@@ -902,7 +948,6 @@ function fetchPublicFeedMessages()
 end
 
 function updatePublicFeedUI()
-  -- Jieshuo Max Compatible Layout for LuaAdapter (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -1099,7 +1144,6 @@ function fetchPrivateChatThread(targetUsername)
 end
 
 function updatePrivateChatUI(targetUsername)
-  -- Jieshuo Max Compatible Layout for LuaAdapter (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";

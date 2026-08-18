@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.0.9",
-                "version_code": 10,
+                "version": "1.1.0",
+                "version_code": 11,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.0.9: Integrated Firebase Realtime Database with GitHub and Local PC backend."
+                "changelog": "Version 1.1.0: Connected Firebase project 'messages-server' for sending & receiving messages with GitHub fallback."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
