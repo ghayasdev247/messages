@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.1.0 (Build Code: 11)
--- Features: Firebase Realtime Database ('messages-server') + GitHub Serverless
--- Networking: Firebase Project Cloud Engine with GitHub REST API Fallback
+-- Version: 1.1.1 (Build Code: 12)
+-- Primary Server: Firebase Realtime Database (messages-server-f2a99)
+-- Fallback Server: GitHub REST API (ghayasdev247/messages) + Local PC Server
 -- ====================================================================
 
 require "import"
@@ -18,18 +18,15 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.1.0"
-local APP_VERSION_CODE = 11
+local APP_VERSION = "1.1.1"
+local APP_VERSION_CODE = 12
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
 local XPK_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk"
 
--- User's Firebase Project Configuration
-local FIREBASE_PROJECT_ID = "messages-server"
-local FIREBASE_URL = "https://messages-server-default-rtdb.firebaseio.com"
-local FIREBASE_ALT_URL = "https://messages-server.firebaseio.com"
-local FIREBASE_ASIA_URL = "https://messages-server-default-rtdb.asia-southeast1.firebasedatabase.app"
+-- Primary Live Firebase Realtime Database Endpoint
+local FIREBASE_URL = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app"
 
 -- Active PC Wi-Fi Server IP
 local BACKEND_URL = "http://10.20.244.148:5000"
@@ -294,7 +291,7 @@ function saveUpdateFile(versionStr, uContent)
 end
 
 -- --------------------------------------------------------------------
--- UNIFIED NETWORKING ENGINE (Firebase 'messages-server' + GitHub + Local)
+-- UNIFIED NETWORKING ENGINE (Primary: Firebase RTDB | Fallback: GitHub API)
 -- --------------------------------------------------------------------
 function fetchFirebaseData(path, callback)
   local fbPath = path:gsub("%.json$", "")
@@ -316,21 +313,7 @@ function fetchFirebaseData(path, callback)
         return
       end
     end
-    
-    -- Try Alt Firebase URL
-    local altUrl = FIREBASE_ALT_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
-    Http.get(altUrl, function(aCode, aContent)
-      if aCode == 200 and aContent and aContent ~= "null" then
-        local fbData = decodeJSON(aContent)
-        if fbData then
-          local list = {}
-          if fbData[1] ~= nil then list = fbData else for _, v in pairs(fbData) do table.insert(list, v) end end
-          callback(true, list)
-          return
-        end
-      end
-      callback(false, nil)
-    end)
+    callback(false, nil)
   end)
 end
 
@@ -340,18 +323,16 @@ function postFirebaseData(path, payload, callback)
   local payloadStr = encodeJSON(payload)
   
   Http.post(fbUrl, payloadStr, function(code, content)
-    if code == 200 or code == 201 then
-      if callback then callback(true) end
-    else
-      Http.post(FIREBASE_ALT_URL .. "/" .. fbPath .. ".json", payloadStr, function(aCode, aContent)
-        if (aCode == 200 or aCode == 201) and callback then callback(true) else callback(false) end
-      end)
+    if (code == 200 or code == 201) and callback then
+      callback(true)
+    elseif callback then
+      callback(false)
     end
   end)
 end
 
 function apiGet(endpoint, githubFilePath, callback)
-  -- Priority 1: Firebase Realtime Database ('messages-server')
+  -- Priority 1: Firebase Realtime Database (messages-server-f2a99)
   fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
     if fbSuccess and fbData and #fbData > 0 then
       callback(true, fbData)
@@ -380,7 +361,7 @@ function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
   local headers = { ["Content-Type"] = "application/json" }
 
-  -- Multi-Sync to Firebase 'messages-server' + GitHub + Local
+  -- Multi-Sync to Primary Firebase Realtime Database + GitHub + Local PC
   if string.find(endpoint, "/api/public%-feed") then
     local msgObj = {
       sender = payload.sender or currentUser.name,
@@ -388,7 +369,7 @@ function apiPost(endpoint, payload, callback)
       time = payload.time or os.date("%I:%M %p")
     }
     
-    -- Post to Firebase 'messages-server'
+    -- Post to Primary Firebase Realtime Database
     postFirebaseData("data/public_feed", msgObj, function(fbOk) end)
     
     -- Post to Local PC Server
@@ -410,7 +391,7 @@ function apiPost(endpoint, payload, callback)
     }
     local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
     
-    -- Post to Firebase 'messages-server'
+    -- Post to Primary Firebase Realtime Database
     postFirebaseData(filePath, msgObj, function(fbOk) end)
     
     -- Post to Local PC Server
@@ -429,7 +410,7 @@ function apiPost(endpoint, payload, callback)
       local now_ts = os.time()
       local userObj = { name = username, last_seen = now_ts, status = "Online" }
       
-      -- Put to Firebase 'messages-server'
+      -- Put to Primary Firebase Realtime Database
       postFirebaseData("data/online_users", userObj, function() end)
       
       -- Post to Local PC Server
@@ -1087,7 +1068,7 @@ function showPrivateChatScreen(targetUsername)
   activity.setContentView(loadlayout(chatLayout))
   
   txtChatTargetHeader.setText("Private: " .. targetUsername)
-  txtChatTargetHeader.setContentDescription("Currently in private chat with " .. targetUsername)
+  txtChatTargetHeader.setContentDescription("Currently chatting in private room.")
   
   fetchPrivateChatThread(targetUsername)
   
