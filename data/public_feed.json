@@ -38,5 +38,10 @@
     "sender": "MobileUser",
     "text": "Mobile test message v1.0.6",
     "time": "01:04 AM"
+  },
+  {
+    "sender": "hi",
+    "text": "hi",
+    "time": "01:11 AM"
   }
 ]
