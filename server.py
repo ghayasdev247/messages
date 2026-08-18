@@ -245,10 +245,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.0.6",
-                "version_code": 7,
+                "version": "1.0.7",
+                "version_code": 8,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.0.6: Fixed send/receive network body parsing and offline GitHub fallback."
+                "changelog": "Version 1.0.7: Fixed AbsListView setMargins layout crash in LuaAdapter."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

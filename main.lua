@@ -1,7 +1,7 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.0.6 (Build Code: 7)
+-- Version: 1.0.7 (Build Code: 8)
 -- Features: Public Feed, Deterministic Private Chats, Card UI, Mobile Downloads Updates
 -- Networking: Local Wi-Fi REST API with Automatic GitHub Serverless Fallback
 -- ====================================================================
@@ -18,11 +18,12 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.6"
-local APP_VERSION_CODE = 7
+local APP_VERSION = "1.0.7"
+local APP_VERSION_CODE = 8
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
+local XPK_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk"
 
 -- Active PC Wi-Fi Server IP
 local BACKEND_URL = "http://10.20.244.148:5000"
@@ -203,7 +204,7 @@ function commitGitHubFile(filePath, newTableData, commitMessage, callback)
 end
 
 -- --------------------------------------------------------------------
--- STORAGE & REMOTE UPDATE ENGINE (Saved to /sdcard/Download/)
+-- STORAGE & REMOTE UPDATE ENGINE (Saved to Mobile Downloads folder)
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
@@ -314,7 +315,6 @@ function apiPost(endpoint, payload, callback)
     if code == 200 or code == 201 then
       if callback then callback(true) end
     else
-      -- Fallback to simple Http.post without custom headers
       Http.post(BACKEND_URL .. endpoint, payloadStr, function(c2, cnt2)
         if c2 == 200 or c2 == 201 then
           if callback then callback(true) end
@@ -866,12 +866,12 @@ function fetchPublicFeedMessages()
 end
 
 function updatePublicFeedUI()
+  -- Fixed layout for LuaAdapter inside ListView (No layout_marginBottom on root view to prevent AbsListView setMargins crash)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
     padding = "10dp";
-    layout_marginBottom = "8dp";
     backgroundColor = "#FFFFFF";
     {
       LinearLayout;
@@ -1064,12 +1064,12 @@ function fetchPrivateChatThread(targetUsername)
 end
 
 function updatePrivateChatUI(targetUsername)
+  -- Fixed layout for LuaAdapter inside ListView (No layout_marginBottom on root view to prevent AbsListView setMargins crash)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
     padding = "10dp";
-    layout_marginBottom = "8dp";
     backgroundColor = "#FFFFFF";
     {
       LinearLayout;
