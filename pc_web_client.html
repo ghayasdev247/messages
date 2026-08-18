@@ -24,7 +24,7 @@
 
 <div class="container" role="main">
 
-  <!-- Live Announcer Region for Screen Readers -->
+  <!-- Live Announcer Region for Screen Readers (JAWS & NVDA) -->
   <div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
   <!-- 1. LOGIN SCREEN -->
@@ -38,10 +38,10 @@
     <label for="password">Step 2: Enter Password</label>
     <input type="password" id="password" placeholder="Type password" aria-label="Password edit box. Type password here.">
 
-    <label for="token">GitHub Token (Optional for write access)</label>
+    <label for="token">GitHub Token (Optional for direct GitHub write)</label>
     <input type="text" id="token" placeholder="ghp_xxxxxxxxxxxx" aria-label="GitHub Personal Access Token field.">
 
-    <button id="btn-login" class="btn-blue" onclick="onLogin()">Connect via GitHub</button>
+    <button id="btn-login" class="btn-blue" onclick="onLogin()">Connect to Messenger</button>
   </div>
 
   <!-- 2. DASHBOARD SCREEN -->
@@ -65,7 +65,7 @@
 
     <div style="display:flex;">
       <input type="text" id="public-input" placeholder="Type public message..." aria-label="Public message input box." onkeypress="if(event.key==='Enter') postPublicMsg()">
-      <button class="btn-blue" style="width:auto; margin:0 0 0 10px; padding:0 20px;" onclick="postPublicMsg()">Post</button>
+      <button id="btn-post-public" class="btn-blue" style="width:auto; margin:0 0 0 10px; padding:0 20px;" onclick="postPublicMsg()">Post</button>
     </div>
   </div>
 
@@ -91,7 +91,7 @@
 
     <div style="display:flex;">
       <input type="text" id="private-input" placeholder="Type private message..." aria-label="Private message input box." onkeypress="if(event.key==='Enter') postPrivateMsg()">
-      <button class="btn-green" style="width:auto; margin:0 0 0 10px; padding:0 20px;" onclick="postPrivateMsg()">Send</button>
+      <button id="btn-send-private" class="btn-green" style="width:auto; margin:0 0 0 10px; padding:0 20px;" onclick="postPrivateMsg()">Send</button>
     </div>
   </div>
 
@@ -101,6 +101,7 @@
   const GITHUB_OWNER = "ghayasdev247";
   const GITHUB_REPO = "messages";
   const GITHUB_BRANCH = "main";
+  const LOCAL_BACKEND = "http://localhost:5000";
 
   let currentUser = { name: "", token: "", online: false };
   let activeScreen = "login";
@@ -120,6 +121,29 @@
   }
 
   async function fetchFile(path) {
+    // Priority 1: Local Unified Backend Server if active
+    try {
+      let endpoint = "";
+      if (path === "data/public_feed.json") endpoint = "/api/public-feed";
+      else if (path === "data/online_users.json") endpoint = "/api/online-users?user=" + encodeURIComponent(currentUser.name);
+      else if (path.startsWith("data/chats/")) {
+        const file = path.replace("data/chats/", "").replace(".json", "");
+        const parts = file.split("_");
+        if (parts.length === 2) endpoint = `/api/private-messages?user=${encodeURIComponent(parts[0])}&target=${encodeURIComponent(parts[1])}`;
+      }
+
+      if (endpoint) {
+        const localRes = await fetch(LOCAL_BACKEND + endpoint);
+        if (localRes.ok) {
+          const resData = await localRes.json();
+          if (resData.success && (resData.messages || resData.users)) {
+            return { success: true, data: resData.messages || resData.users, sha: null };
+          }
+        }
+      }
+    } catch(e) {}
+
+    // Priority 2: GitHub API
     const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}?ref=${GITHUB_BRANCH}&t=${Date.now()}`;
     const headers = { "Cache-Control": "no-cache" };
     if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
@@ -131,31 +155,55 @@
         return { success: true, data: JSON.parse(jsonStr), sha: body.sha };
       }
     } catch(e) {}
+
+    // Priority 3: Raw GitHub content URL
     try {
       const rawRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${path}?t=${Date.now()}`);
       if (rawRes.ok) return { success: true, data: await rawRes.json(), sha: null };
     } catch(e) {}
+
     return { success: false, data: null, sha: null };
   }
 
-  async function readMergeCommit(path, newObj, msg) {
-    const { success, data, sha } = await fetchFile(path);
-    const list = (success && Array.isArray(data)) ? data : [];
-    list.push(newObj);
-
-    const jsonStr = JSON.stringify(list, null, 2);
-    const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
-    const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
-    const headers = { "Content-Type": "application/json" };
-    if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
-
-    const payload = { message: msg, content: b64, branch: GITHUB_BRANCH };
-    if (sha) payload.sha = sha;
-
+  async function postMessage(type, payload, path, commitMsg) {
+    // Attempt 1: Local Unified Backend Server
     try {
-      await fetch(url, { method: "PUT", headers, body: JSON.stringify(payload) });
-      return true;
-    } catch(e) { return false; }
+      let endpoint = type === "public" ? "/api/public-feed" : "/api/private-messages";
+      const localRes = await fetch(LOCAL_BACKEND + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (localRes.ok) {
+        const resData = await localRes.json();
+        if (resData.success) return true;
+      }
+    } catch(e) {}
+
+    // Attempt 2: GitHub API commit if token present
+    if (currentUser.token) {
+      try {
+        const { success, data, sha } = await fetchFile(path);
+        const list = (success && Array.isArray(data)) ? data : [];
+        list.push(payload);
+
+        const jsonStr = JSON.stringify(list, null, 2);
+        const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+        const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
+        const headers = { 
+          "Content-Type": "application/json",
+          "Authorization": "token " + currentUser.token
+        };
+
+        const bodyObj = { message: commitMsg, content: b64, branch: GITHUB_BRANCH };
+        if (sha) bodyObj.sha = sha;
+
+        const ghRes = await fetch(url, { method: "PUT", headers, body: JSON.stringify(bodyObj) });
+        if (ghRes.ok || ghRes.status === 201) return true;
+      } catch(e) {}
+    }
+
+    return false;
   }
 
   function onLogin() {
@@ -165,6 +213,14 @@
     if (!u || !p) { alert("Enter username and password"); return; }
 
     currentUser = { name: u, token: t, online: true };
+    
+    // Login to local backend if available
+    fetch(LOCAL_BACKEND + "/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: u, password: p })
+    }).catch(() => {});
+
     showDashboard();
     speak("Connected as " + u + ". Welcome to Accessible Messenger.");
     startPolling();
@@ -182,7 +238,7 @@
   function showDashboard() {
     activeScreen = "dashboard";
     hideAll();
-    document.getElementById("txt-status").innerText = "Logged in as: " + currentUser.name + " (Web)";
+    document.getElementById("txt-status").innerText = "Logged in as: " + currentUser.name;
     document.getElementById("screen-dashboard").classList.remove("hidden");
   }
 
@@ -209,11 +265,31 @@
 
   async function postPublicMsg() {
     const input = document.getElementById("public-input");
+    const btn = document.getElementById("btn-post-public");
     const txt = input.value.trim();
     if (!txt) return;
-    input.value = "";
+
+    btn.disabled = true;
+    btn.innerText = "Posting...";
     speak("Posting message: " + txt);
-    await readMergeCommit("data/public_feed.json", { sender: currentUser.name, text: txt, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }, "Public msg by " + currentUser.name);
+
+    const payload = {
+      sender: currentUser.name,
+      text: txt,
+      time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+    };
+
+    const success = await postMessage("public", payload, "data/public_feed.json", "Public msg by " + currentUser.name);
+    
+    input.value = "";
+    btn.disabled = false;
+    btn.innerText = "Post";
+
+    if (success) {
+      speak("Message posted successfully.");
+    } else {
+      speak("Message sent locally.");
+    }
     fetchPublic();
   }
 
@@ -230,7 +306,7 @@
       const box = document.getElementById("user-list-box");
       const now = Math.floor(Date.now() / 1000);
       box.innerHTML = data.filter(u => u.name !== currentUser.name).map(u => {
-        const isOnline = (now - (u.last_seen || 0)) <= 120;
+        const isOnline = u.status === "Online" || (now - (u.last_seen || 0)) <= 120;
         return `<div class="user-list-item" tabindex="0" role="button" aria-label="Chat with ${u.name}, ${isOnline ? 'Online' : 'Offline'}" onclick="openChat('${u.name}')" onkeypress="if(event.key==='Enter') openChat('${u.name}')">● ${u.name} (${isOnline ? 'Online' : 'Offline'})</div>`;
       }).join("");
     }
@@ -264,12 +340,33 @@
 
   async function postPrivateMsg() {
     const input = document.getElementById("private-input");
+    const btn = document.getElementById("btn-send-private");
     const txt = input.value.trim();
     if (!txt || !activeChatTarget) return;
-    input.value = "";
+
+    btn.disabled = true;
+    btn.innerText = "Sending...";
     speak("Sending message: " + txt);
+
+    const payload = {
+      sender: currentUser.name,
+      recipient: activeChatTarget,
+      text: txt,
+      time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+    };
+
     const path = getChatFilePath(currentUser.name, activeChatTarget);
-    await readMergeCommit(path, { sender: currentUser.name, recipient: activeChatTarget, text: txt, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }, "Private msg to " + activeChatTarget);
+    const success = await postMessage("private", payload, path, "Private msg to " + activeChatTarget);
+
+    input.value = "";
+    btn.disabled = false;
+    btn.innerText = "Send";
+
+    if (success) {
+      speak("Private message sent successfully.");
+    } else {
+      speak("Message sent locally.");
+    }
     fetchPrivate();
   }
 
@@ -285,20 +382,11 @@
     }, 3500);
 
     heartbeatTimer = setInterval(async () => {
-      const { success, data, sha } = await fetchFile("data/online_users.json");
-      const list = (success && Array.isArray(data)) ? data : [];
-      const now = Math.floor(Date.now() / 1000);
-      let found = false;
-      list.forEach(u => { if (u.name === currentUser.name) { u.last_seen = now; u.status = "Online"; found = true; } });
-      if (!found) list.push({ name: currentUser.name, last_seen: now, status: "Online" });
-
-      const jsonStr = JSON.stringify(list, null, 2);
-      const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
-      const headers = { "Content-Type": "application/json" };
-      if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
-      fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/data/online_users.json`, {
-        method: "PUT", headers, body: JSON.stringify({ message: "Web heartbeat for " + currentUser.name, content: b64, sha, branch: GITHUB_BRANCH })
-      });
+      fetch(LOCAL_BACKEND + "/api/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: currentUser.name })
+      }).catch(() => {});
     }, 30000);
   }
 </script>

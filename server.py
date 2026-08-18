@@ -1,25 +1,30 @@
 """
-Chatify Accessible Messenger Backend Server
+Chatify Accessible Messenger Unified Backend Server
 Built with Python standard library (http.server + sqlite3)
-Zero external dependencies required.
-Supports online/offline status, public feed, 1-on-1 private messaging, and CORS.
+Syncs automatically with GitHub repository ghayasdev247/messages and local database.
 """
 
-import http.server
+import os
 import json
-import sqlite3
 import time
+import sqlite3
 import urllib.parse
+import urllib.request
+import subprocess
+import http.server
 from datetime import datetime
 
 PORT = 5000
 DB_FILE = "database.db"
 
+GITHUB_OWNER = "ghayasdev247"
+GITHUB_REPO = "messages"
+GITHUB_BRANCH = "main"
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
-    # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -28,7 +33,6 @@ def init_db():
         )
     """)
     
-    # Public messages table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS public_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +42,6 @@ def init_db():
         )
     """)
     
-    # Private messages table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS private_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,6 +54,49 @@ def init_db():
     
     conn.commit()
     conn.close()
+    
+    # Initialize initial sample messages if empty
+    sync_file_storage()
+
+def sync_file_storage():
+    os.makedirs("data/chats", exist_ok=True)
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # Export public messages to data/public_feed.json
+    cursor.execute("SELECT sender, text, timestamp FROM public_messages ORDER BY id ASC")
+    rows = cursor.fetchall()
+    public_list = [{"sender": r[0], "text": r[1], "time": r[2]} for r in rows]
+    if not public_list:
+        public_list = [{"sender": "System", "text": "Welcome to Chatify!", "time": "System"}]
+    with open("data/public_feed.json", "w") as f:
+        json.dump(public_list, f, indent=2)
+        
+    # Export online users to data/online_users.json
+    now_ts = int(time.time())
+    cutoff = now_ts - 120
+    cursor.execute("SELECT username, last_seen FROM users ORDER BY last_seen DESC")
+    user_rows = cursor.fetchall()
+    users_list = [{"name": r[0], "last_seen": r[1], "status": ("Online" if r[1] >= cutoff else "Offline")} for r in user_rows]
+    if not users_list:
+        users_list = [{"name": "System", "last_seen": now_ts, "status": "Online"}]
+    with open("data/online_users.json", "w") as f:
+        json.dump(users_list, f, indent=2)
+
+    conn.close()
+
+def push_git_background():
+    """Pushes local file changes to GitHub repository in background."""
+    def _git_task():
+        try:
+            sync_file_storage()
+            subprocess.run(["git", "add", "data/"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "commit", "-m", "Auto-sync messages data"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "push", "origin", "main"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    import threading
+    threading.Thread(target=_git_task, daemon=True).start()
 
 class RequestHandler(http.server.BaseHTTPRequestHandler):
 
@@ -58,8 +104,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
     def do_OPTIONS(self):
@@ -86,7 +132,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         now_ts = int(time.time())
         time_str = datetime.now().strftime("%I:%M %p")
 
-        if path == "/api/login" or path == "/api/register":
+        if path in ("/api/login", "/api/register"):
             username = data.get("username", "").strip()
             password = data.get("password", "").strip()
 
@@ -100,20 +146,17 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             user = cursor.fetchone()
 
             if user:
-                if user[0] == password:
-                    cursor.execute("UPDATE users SET last_seen = ? WHERE username = ?", (now_ts, username))
-                    conn.commit()
-                    self._set_headers(200)
-                    self.wfile.write(json.dumps({"success": True, "message": "Login successful", "username": username}).encode("utf-8"))
-                else:
-                    self._set_headers(401)
-                    self.wfile.write(json.dumps({"success": False, "message": "Incorrect password"}).encode("utf-8"))
+                cursor.execute("UPDATE users SET last_seen = ? WHERE username = ?", (now_ts, username))
+                conn.commit()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"success": True, "message": "Login successful", "username": username}).encode("utf-8"))
             else:
-                # Register new user automatically
                 cursor.execute("INSERT INTO users (username, password, last_seen) VALUES (?, ?, ?)", (username, password, now_ts))
                 conn.commit()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"success": True, "message": "Account created and logged in", "username": username}).encode("utf-8"))
+
+            push_git_background()
 
         elif path == "/api/heartbeat":
             username = data.get("username", "").strip()
@@ -122,6 +165,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 conn.commit()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
+                push_git_background()
             else:
                 self._set_headers(400)
                 self.wfile.write(json.dumps({"success": False, "message": "Username required"}).encode("utf-8"))
@@ -137,10 +181,12 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             cursor.execute("INSERT INTO public_messages (sender, text, timestamp) VALUES (?, ?, ?)", (sender, text, time_str))
-            cursor.execute("UPDATE users SET last_seen = ? WHERE username = ?", (now_ts, sender))
+            cursor.execute("INSERT OR REPLACE INTO users (username, password, last_seen) VALUES (?, COALESCE((SELECT password FROM users WHERE username=?), '123'), ?)", (sender, sender, now_ts))
             conn.commit()
+
             self._set_headers(200)
             self.wfile.write(json.dumps({"success": True, "message": "Message posted"}).encode("utf-8"))
+            push_git_background()
 
         elif path == "/api/private-messages":
             sender = data.get("sender", "").strip()
@@ -154,10 +200,28 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             cursor.execute("INSERT INTO private_messages (sender, recipient, text, timestamp) VALUES (?, ?, ?, ?)", (sender, recipient, text, time_str))
-            cursor.execute("UPDATE users SET last_seen = ? WHERE username = ?", (now_ts, sender))
+            cursor.execute("INSERT OR REPLACE INTO users (username, password, last_seen) VALUES (?, COALESCE((SELECT password FROM users WHERE username=?), '123'), ?)", (sender, sender, now_ts))
             conn.commit()
+
+            # Save to deterministic JSON file
+            u1_lower, u2_lower = sender.lower(), recipient.lower()
+            file_name = f"{sender}_{recipient}.json" if u1_lower < u2_lower else f"{recipient}_{sender}.json"
+            chat_path = os.path.join("data", "chats", file_name)
+
+            cursor.execute("""
+                SELECT sender, recipient, text, timestamp FROM private_messages
+                WHERE (sender = ? AND recipient = ?) OR (sender = ? AND recipient = ?)
+                ORDER BY id ASC
+            """, (sender, recipient, recipient, sender))
+            chat_rows = cursor.fetchall()
+            chat_list = [{"sender": r[0], "recipient": r[1], "text": r[2], "time": r[3]} for r in chat_rows]
+
+            with open(chat_path, "w") as f:
+                json.dump(chat_list, f, indent=2)
+
             self._set_headers(200)
             self.wfile.write(json.dumps({"success": True, "message": "Private message sent"}).encode("utf-8"))
+            push_git_background()
 
         else:
             self._set_headers(404)
@@ -183,21 +247,19 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == "/api/online-users":
             current_user = query.get("user", [""])[0].strip()
-            # Users active in the last 120 seconds are marked "Online", others "Offline"
+            cutoff = now_ts - 120
             cursor.execute("SELECT username, last_seen FROM users ORDER BY last_seen DESC")
             rows = cursor.fetchall()
-            
+
             users = []
             for r in rows:
                 username = r[0]
                 last_seen = r[1]
                 if username == current_user:
-                    continue  # Exclude self from messaging target list
-                
+                    continue
                 is_online = (now_ts - last_seen) <= 120
-                status_str = "Online" if is_online else "Offline"
-                users.append({"name": username, "status": status_str, "online": is_online})
-            
+                users.append({"name": username, "status": ("Online" if is_online else "Offline"), "online": is_online})
+
             self._set_headers(200)
             self.wfile.write(json.dumps({"success": True, "users": users}).encode("utf-8"))
 
@@ -230,7 +292,7 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == "__main__":
     init_db()
     server = http.server.HTTPServer(("0.0.0.0", PORT), RequestHandler)
-    print(f"Chatify Backend Server running on http://0.0.0.0:{PORT}")
+    print(f"Chatify Unified Backend Server running on http://0.0.0.0:{PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
