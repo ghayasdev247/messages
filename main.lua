@@ -24,8 +24,8 @@ local APP_VERSION_CODE = 7
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
 
--- Local PC Wi-Fi Server IP
-local BACKEND_URL = "http://10.190.183.148:5000"
+-- Active PC Wi-Fi Server IP
+local BACKEND_URL = "http://10.20.244.148:5000"
 
 local GITHUB_OWNER = "ghayasdev247"
 local GITHUB_REPO = "messages"
@@ -112,7 +112,7 @@ function base64Encode(data)
     local r,b='',x:byte()
     for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
     return r
-  end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+  end)..'0000'):gsub('%d%d%d?%d?%d?', function(x)
     if (#x < 6) then return '' end
     local c=0
     for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
@@ -127,7 +127,7 @@ function base64Decode(data)
     local r,f='',(b64chars:find(x)-1)
     for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
     return r
-  end):gsub('%d%d%d?%d?%d?%d?', function(x)
+  end):gsub('%d%d%d?%d?%d?', function(x)
     if (#x ~= 8) then return '' end
     local c=0
     for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
@@ -283,7 +283,7 @@ function saveUpdateFile(versionStr, uContent)
     end)
   end
   
-  announce("Update v" .. versionStr .. " saved to Download folder: " .. fileName .. ". Re-import plugin to apply.")
+  announce("The update is successful. Re-import the plugin to continue. Saved to Download folder: " .. fileName)
 end
 
 -- --------------------------------------------------------------------
