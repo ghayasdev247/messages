@@ -2,7 +2,7 @@
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
 -- Features: Public Feed, Deterministic Private Messaging, Focus Stability, Card UI Layout
--- Backend: Unified Cross-Device Real-Time Sync & Safe File Update (No Hard Reloading)
+-- Backend: Unified Cross-Device Real-Time Sync & Mobile Downloads Storage Auto-Update
 -- ====================================================================
 
 require "import"
@@ -17,8 +17,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.4"
-local APP_VERSION_CODE = 5
+local APP_VERSION = "1.0.5"
+local APP_VERSION_CODE = 6
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -102,7 +102,7 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- SAFE FILE-ONLY REMOTE UPDATE ENGINE (No Hard Reloading for Jieshuo)
+-- MOBILE DOWNLOADS STORAGE REMOTE UPDATE ENGINE (Saved to /sdcard/Download/)
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
@@ -162,16 +162,38 @@ function checkForRemoteUpdates(manualCheck)
 end
 
 function saveUpdateFile(versionStr, uContent)
+  local downloadDir = "/sdcard/Download"
   pcall(function()
-    local savePath = activity.getFilesDir().getAbsolutePath() .. "/main.lua"
+    import "android.os.Environment"
+    downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
+  end)
+  
+  local fileName = "Accessible_Messenger_v" .. versionStr .. ".lua"
+  local savePath = downloadDir .. "/" .. fileName
+  local savedSuccess = false
+  
+  pcall(function()
     local file = io.open(savePath, "w")
     if file then
       file:write(uContent)
       file:close()
+      savedSuccess = true
     end
   end)
   
-  announce("Update Version " .. versionStr .. " saved successfully! Please reopen the plugin/app to apply.")
+  -- Fallback to app internal storage if SD Card Download folder access is restricted
+  if not savedSuccess then
+    savePath = activity.getFilesDir().getAbsolutePath() .. "/" .. fileName
+    pcall(function()
+      local file = io.open(savePath, "w")
+      if file then
+        file:write(uContent)
+        file:close()
+      end
+    end)
+  end
+  
+  announce("The update is successful. Re-import the plugin to continue. Saved to Download folder: " .. fileName)
 end
 
 -- --------------------------------------------------------------------

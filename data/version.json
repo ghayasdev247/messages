@@ -1,7 +1,7 @@
 {
-  "version": "1.0.4",
-  "version_code": 5,
+  "version": "1.0.5",
+  "version_code": 6,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 1.0.4: Clean login screen layout, safe update file engine, and screen reader focus stability."
+  "changelog": "Version 1.0.5: Updates save directly to Mobile Downloads folder with step-by-step Jieshuo re-import instructions."
 }
