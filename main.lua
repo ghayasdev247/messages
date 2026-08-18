@@ -2,7 +2,7 @@
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
 -- Features: Public Feed, Deterministic Private Messaging, Focus Stability, Card UI Layout
--- Backend: Unified Cross-Device Real-Time Sync & Remote Auto-Updates (Local Wi-Fi + GitHub)
+-- Backend: Unified Cross-Device Real-Time Sync & Safe File Update (No Hard Reloading)
 -- ====================================================================
 
 require "import"
@@ -17,8 +17,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.1"
-local APP_VERSION_CODE = 2
+local APP_VERSION = "1.0.2"
+local APP_VERSION_CODE = 3
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -102,11 +102,11 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- DUAL NETWORK REMOTE AUTO-UPDATE ENGINE (Local Wi-Fi + GitHub Remote)
+-- SAFE FILE-ONLY REMOTE UPDATE ENGINE (No Hard Reloading for Jieshuo)
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
-    announce("Checking GitHub and Local Network for new updates...")
+    announce("Checking GitHub for updates...")
   end
   
   -- Priority 1: Check Local Wi-Fi Network Update API
@@ -115,13 +115,13 @@ function checkForRemoteUpdates(manualCheck)
       local manifest = decodeJSON(lContent)
       if manifest and manifest.version_code then
         local remoteCode = tonumber(manifest.version_code) or 1
-        if remoteCode > APP_VERSION_CODE or (manualCheck and remoteCode >= APP_VERSION_CODE) then
+        if remoteCode > APP_VERSION_CODE then
           local versionStr = manifest.version or tostring(remoteCode)
           announce("Downloading update Version " .. versionStr .. " from Local Server...")
           
           Http.get(BACKEND_URL .. "/api/download-lua", function(uCode, uContent)
             if uCode == 200 and uContent and uContent ~= "" then
-              applyDownloadedUpdate(versionStr, uContent)
+              saveUpdateFile(versionStr, uContent)
               return
             end
           end)
@@ -137,14 +137,14 @@ function checkForRemoteUpdates(manualCheck)
         local manifest = decodeJSON(content)
         if manifest and manifest.version_code then
           local remoteCode = tonumber(manifest.version_code) or 1
-          if remoteCode > APP_VERSION_CODE or (manualCheck and remoteCode >= APP_VERSION_CODE) then
+          if remoteCode > APP_VERSION_CODE then
             local versionStr = manifest.version or tostring(remoteCode)
             announce("Downloading update Version " .. versionStr .. " from GitHub...")
             
             local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
             Http.get(updateUrl, function(uCode, uContent)
               if uCode == 200 and uContent and uContent ~= "" then
-                applyDownloadedUpdate(versionStr, uContent)
+                saveUpdateFile(versionStr, uContent)
               else
                 announce("Failed to download update script from GitHub.")
               end
@@ -161,7 +161,7 @@ function checkForRemoteUpdates(manualCheck)
   end)
 end
 
-function applyDownloadedUpdate(versionStr, uContent)
+function saveUpdateFile(versionStr, uContent)
   pcall(function()
     local savePath = activity.getFilesDir().getAbsolutePath() .. "/main.lua"
     local file = io.open(savePath, "w")
@@ -171,14 +171,7 @@ function applyDownloadedUpdate(versionStr, uContent)
     end
   end)
   
-  announce("Update v" .. versionStr .. " downloaded successfully! Hot reloading application...")
-  
-  pcall(function()
-    local func, err = loadstring(uContent)
-    if func then
-      func()
-    end
-  end)
+  announce("Update Version " .. versionStr .. " saved successfully! Please reopen the plugin/app to apply.")
 end
 
 -- --------------------------------------------------------------------
@@ -328,7 +321,7 @@ local loginLayout = {
     backgroundColor = "#455A64";
     textColor = "#FFFFFF";
     textSize = "14sp";
-    ContentDescription = "Check for Auto Updates button. Double tap to check Local Network and GitHub for updates.";
+    ContentDescription = "Check for Auto Updates button. Double tap to check for updates.";
   };
 }
 
@@ -402,7 +395,7 @@ local dashboardLayout = {
     backgroundColor = "#455A64";
     textColor = "#FFFFFF";
     textSize = "15sp";
-    ContentDescription = "Check for Updates button. Double tap to check Local Network and GitHub for updates.";
+    ContentDescription = "Check for Updates button. Double tap to check for updates.";
   };
 
   -- Logout Button
@@ -629,8 +622,6 @@ function showLoginScreen()
   activeScreen = "login"
   isPolling = false
   activity.setContentView(loadlayout(loginLayout))
-  
-  checkForRemoteUpdates(false)
   
   btnCheckUpdate.onClick = function()
     checkForRemoteUpdates(true)
