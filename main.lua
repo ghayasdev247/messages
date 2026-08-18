@@ -1,8 +1,8 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.0.5 (Build Code: 6)
--- Features: Public Feed, Deterministic Private Chats, Card UI, External Download Updates
+-- Version: 1.0.6 (Build Code: 7)
+-- Features: Public Feed, Deterministic Private Chats, Card UI, Mobile Downloads Updates
 -- Networking: Local Wi-Fi REST API with Automatic GitHub Serverless Fallback
 -- ====================================================================
 
@@ -18,8 +18,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.5"
-local APP_VERSION_CODE = 6
+local APP_VERSION = "1.0.6"
+local APP_VERSION_CODE = 7
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -307,63 +307,73 @@ end
 
 function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
-  Http.post(BACKEND_URL .. endpoint, payloadStr, function(code, content)
+  local headers = {}
+  headers["Content-Type"] = "application/json"
+
+  Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function(code, content)
     if code == 200 or code == 201 then
       if callback then callback(true) end
     else
-      -- GITHUB SERVERLESS FALLBACK FOR OFFLINE / REMOTE CONNECTIONS
-      if string.find(endpoint, "/api/public%-feed") then
-        local msgObj = {
-          sender = payload.sender or currentUser.name,
-          text = payload.text,
-          time = payload.time or os.date("%I:%M %p")
-        }
-        fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
-          local feedToSave = currentFeed or {}
-          table.insert(feedToSave, msgObj)
-          commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
-        end)
-
-      elseif string.find(endpoint, "/api/private%-messages") then
-        local msgObj = {
-          sender = payload.sender or currentUser.name,
-          recipient = payload.recipient,
-          text = payload.text,
-          time = payload.time or os.date("%I:%M %p")
-        }
-        local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-        fetchGitHubFile(filePath, function(ok, currentThread)
-          local threadToSave = currentThread or {}
-          table.insert(threadToSave, msgObj)
-          commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
-        end)
-
-      elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
-        local username = payload.username or currentUser.name
-        if username and username ~= "" then
-          fetchGitHubFile("data/online_users.json", function(ok, userList)
-            local list = userList or {}
-            local found = false
-            local now_ts = os.time()
-            for _, u in ipairs(list) do
-              if u.name == username then
-                u.last_seen = now_ts
-                u.status = "Online"
-                found = true
-                break
-              end
-            end
-            if not found then
-              table.insert(list, { name = username, last_seen = now_ts, status = "Online" })
-            end
-            commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
-          end)
+      -- Fallback to simple Http.post without custom headers
+      Http.post(BACKEND_URL .. endpoint, payloadStr, function(c2, cnt2)
+        if c2 == 200 or c2 == 201 then
+          if callback then callback(true) end
         else
-          if callback then callback(false) end
+          -- GITHUB SERVERLESS FALLBACK FOR OFFLINE / REMOTE CONNECTIONS
+          if string.find(endpoint, "/api/public%-feed") then
+            local msgObj = {
+              sender = payload.sender or currentUser.name,
+              text = payload.text,
+              time = payload.time or os.date("%I:%M %p")
+            }
+            fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
+              local feedToSave = currentFeed or {}
+              table.insert(feedToSave, msgObj)
+              commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
+            end)
+
+          elseif string.find(endpoint, "/api/private%-messages") then
+            local msgObj = {
+              sender = payload.sender or currentUser.name,
+              recipient = payload.recipient,
+              text = payload.text,
+              time = payload.time or os.date("%I:%M %p")
+            }
+            local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
+            fetchGitHubFile(filePath, function(ok, currentThread)
+              local threadToSave = currentThread or {}
+              table.insert(threadToSave, msgObj)
+              commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
+            end)
+
+          elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
+            local username = payload.username or currentUser.name
+            if username and username ~= "" then
+              fetchGitHubFile("data/online_users.json", function(ok, userList)
+                local list = userList or {}
+                local found = false
+                local now_ts = os.time()
+                for _, u in ipairs(list) do
+                  if u.name == username then
+                    u.last_seen = now_ts
+                    u.status = "Online"
+                    found = true
+                    break
+                  end
+                end
+                if not found then
+                  table.insert(list, { name = username, last_seen = now_ts, status = "Online" })
+                end
+                commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
+              end)
+            else
+              if callback then callback(false) end
+            end
+          else
+            if callback then callback(false) end
+          end
         end
-      else
-        if callback then callback(false) end
-      end
+      end)
     end
   end)
 end
