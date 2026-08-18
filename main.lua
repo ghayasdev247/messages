@@ -20,8 +20,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.6.2"
-local APP_VERSION_CODE = 21
+local APP_VERSION = "1.6.3"
+local APP_VERSION_CODE = 22
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -556,8 +556,11 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- ANDROID AAC HD VOICE RECORDING & CACHED PLAYBACK ENGINE
+-- ANDROID SCREEN-READER ACCESSIBLE VOICE RECORDING & PLAYBACK ENGINE
 -- --------------------------------------------------------------------
+local activeVoicePlayer = nil
+local recordingStartTime = 0
+
 function downloadAndPlayVoiceNote(msgItem)
   import "android.media.MediaPlayer"
   
@@ -581,12 +584,12 @@ function downloadAndPlayVoiceNote(msgItem)
     if not folder.exists() then folder.mkdirs() end
   end)
   
-  -- Create a unique file name based on string length & sender time to reuse cache
+  -- Create unique cached audio file path
   local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", "")
   local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
   local isFileReady = false
   
-  -- 1. Check if file already exists in local storage cache (DO NOT RE-DOWNLOAD!)
+  -- Check if local file exists and is valid
   pcall(function()
     local fObj = File(targetAudioFile)
     if fObj.exists() and fObj.length() > 0 then
@@ -594,7 +597,6 @@ function downloadAndPlayVoiceNote(msgItem)
     end
   end)
 
-  -- Check if audioData itself is an existing local file
   if not isFileReady then
     pcall(function()
       local fObj = File(audioData)
@@ -605,7 +607,7 @@ function downloadAndPlayVoiceNote(msgItem)
     end)
   end
   
-  -- 2. Decode from Base64 using Native Android SDK if not cached
+  -- Decode from Base64 if not yet cached
   if not isFileReady then
     announce("Downloading voice note...")
     isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
@@ -614,86 +616,104 @@ function downloadAndPlayVoiceNote(msgItem)
   if isFileReady then
     announce("Playing voice note...")
     pcall(function()
-      local mp = MediaPlayer()
-      mp.reset()
-      mp.setDataSource(targetAudioFile)
-      mp.prepare()
-      mp.start()
+      if activeVoicePlayer then
+        pcall(function()
+          if activeVoicePlayer.isPlaying() then activeVoicePlayer.stop() end
+          activeVoicePlayer.release()
+        end)
+        activeVoicePlayer = nil
+      end
       
-      mp.setOnCompletionListener(MediaPlayer.OnCompletionListener{
+      activeVoicePlayer = MediaPlayer()
+      activeVoicePlayer.reset()
+      activeVoicePlayer.setDataSource(targetAudioFile)
+      activeVoicePlayer.prepare()
+      activeVoicePlayer.start()
+      
+      activeVoicePlayer.setOnCompletionListener(MediaPlayer.OnCompletionListener{
         onCompletion = function(player)
           announce("Voice note finished playing.")
-          player.release()
+          pcall(function() player.release() end)
+          activeVoicePlayer = nil
         end
       })
     end)
   else
-    announce("Failed to decode or play voice note audio.")
+    announce("Failed to decode voice note audio.")
   end
 end
 
 function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
-  import "android.view.MotionEvent"
   import "android.media.MediaRecorder"
   
-  btnWidget.setOnTouchListener(View.OnTouchListener{
-    onTouch = function(view, event)
-      local action = event.getAction()
-      if action == MotionEvent.ACTION_DOWN then
-        pcall(function()
-          local downloadDir = "/sdcard/Download"
-          voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".m4a"
-          
-          -- AAC MPEG_4 HD Voice Recording Engine (100% Android Sound Guaranteed)
-          mediaRecorder = MediaRecorder()
-          mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-          mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-          mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-          mediaRecorder.setAudioSamplingRate(44100)
-          mediaRecorder.setAudioEncodingBitRate(96000)
-          mediaRecorder.setOutputFile(voiceRecordPath)
-          mediaRecorder.prepare()
-          mediaRecorder.start()
-          isRecordingVoice = true
-          announce("Recording voice note. Release button to send.")
-        end)
-        return true
-      elseif action == MotionEvent.ACTION_UP or action == MotionEvent.ACTION_CANCEL then
-        if isRecordingVoice then
-          pcall(function()
-            if mediaRecorder then
-              mediaRecorder.stop()
-              mediaRecorder.release()
-              mediaRecorder = nil
-            end
-            isRecordingVoice = false
-            
-            -- Encode binary AAC audio safely using Android SDK Base64
-            local b64Audio = encodeAudioFileToBase64(voiceRecordPath)
-            
-            local msgObj = {
-              sender = currentUser.name,
-              recipient = targetName,
-              text = "🎤 Voice Message 🔊",
-              isVoice = true,
-              audio = b64Audio,
-              voicePath = voiceRecordPath,
-              time = os.date("%I:%M %p")
-            }
-            
-            if isPublic then
-              apiPost("/api/public-feed", msgObj, function() fetchPublicFeedMessages() end)
-            else
-              apiPost("/api/private-messages", msgObj, function() fetchPrivateChatThread(targetName) end)
-            end
-            announce("Voice message sent!")
-          end)
-        end
-        return true
+  local function startVoiceRecording()
+    if isRecordingVoice then return end
+    pcall(function()
+      local downloadDir = "/sdcard/Download"
+      voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".m4a"
+      
+      mediaRecorder = MediaRecorder()
+      mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+      mediaRecorder.setAudioSamplingRate(44100)
+      mediaRecorder.setAudioEncodingBitRate(96000)
+      mediaRecorder.setOutputFile(voiceRecordPath)
+      mediaRecorder.prepare()
+      mediaRecorder.start()
+      isRecordingVoice = true
+      recordingStartTime = os.time()
+      
+      btnWidget.setText("⏹️")
+      btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
+      announce("Voice recording started. Speak now, then tap to stop and send.")
+    end)
+  end
+  
+  local function stopAndSendVoiceRecording()
+    if not isRecordingVoice then return end
+    pcall(function()
+      if mediaRecorder then
+        mediaRecorder.stop()
+        mediaRecorder.release()
+        mediaRecorder = nil
       end
-      return false
+    end)
+    isRecordingVoice = false
+    btnWidget.setText("🎙️")
+    btnWidget.setContentDescription("Record voice note button. Double tap to record.")
+    
+    local b64Audio = encodeAudioFileToBase64(voiceRecordPath)
+    if b64Audio and #b64Audio > 10 then
+      local msgObj = {
+        sender = currentUser.name,
+        recipient = targetName,
+        text = "🎤 Voice Message 🔊",
+        isVoice = true,
+        audio = b64Audio,
+        voicePath = voiceRecordPath,
+        time = os.date("%I:%M %p")
+      }
+      
+      if isPublic then
+        apiPost("/api/public-feed", msgObj, function() fetchPublicFeedMessages() end)
+      else
+        apiPost("/api/private-messages", msgObj, function() fetchPrivateChatThread(targetName) end)
+      end
+      announce("Voice message sent successfully!")
+    else
+      announce("Voice recording too short or cancelled.")
     end
-  })
+  end
+  
+  -- 1. Tap-to-Record Toggle (Primary for Jieshuo / Screen Readers)
+  btnWidget.onClick = function()
+    if not isRecordingVoice then
+      startVoiceRecording()
+    else
+      stopAndSendVoiceRecording()
+    end
+  end
 end
 
 -- --------------------------------------------------------------------

@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.6.2",
-                "version_code": 21,
+                "version": "1.6.3",
+                "version_code": 22,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.6.2: Fixed android.util.Base64 parameter type error with pure Lua Base64 encoder/decoder."
+                "changelog": "Version 1.6.3: Tap-to-Record & Hold-to-Record Screen Reader Voice Engine with Auto-Protected MediaPlayer Playback."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
