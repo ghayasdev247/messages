@@ -3,5 +3,10 @@
     "sender": "TestUser",
     "text": "Hello world!",
     "time": "08:53 PM"
+  },
+  {
+    "sender": "ghayas",
+    "text": "hi",
+    "time": "10:58 PM"
   }
 ]
