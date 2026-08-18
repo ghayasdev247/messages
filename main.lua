@@ -22,8 +22,8 @@ import "java.io.FileOutputStream"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.6.0"
-local APP_VERSION_CODE = 19
+local APP_VERSION = "1.6.1"
+local APP_VERSION_CODE = 20
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1287,6 +1287,7 @@ function updatePublicFeedUI()
         id = "msgSender";
         textSize = "14sp";
         textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
         layout_weight = "1";
       };
       {
@@ -1534,6 +1535,7 @@ function updatePrivateChatUI(targetUsername)
         id = "msgSender";
         textSize = "14sp";
         textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
         layout_weight = "1";
       };
       {
