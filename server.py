@@ -89,7 +89,7 @@ def push_git_background():
     def _git_task():
         try:
             sync_file_storage()
-            subprocess.run(["git", "add", "data/"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["git", "add", "data/public_feed.json", "data/online_users.json", "data/chats/"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["git", "commit", "-m", "Auto-sync messages data"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["git", "push", "origin", "main"], cwd=os.getcwd(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
