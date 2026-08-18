@@ -1,7 +1,7 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.0.7 (Build Code: 8)
+-- Version: 1.0.8 (Build Code: 9)
 -- Features: Public Feed, Deterministic Private Chats, Card UI, Mobile Downloads Updates
 -- Networking: Local Wi-Fi REST API with Automatic GitHub Serverless Fallback
 -- ====================================================================
@@ -18,8 +18,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.7"
-local APP_VERSION_CODE = 8
+local APP_VERSION = "1.0.8"
+local APP_VERSION_CODE = 9
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -866,7 +866,7 @@ function fetchPublicFeedMessages()
 end
 
 function updatePublicFeedUI()
-  -- Fixed layout for LuaAdapter inside ListView (No layout_marginBottom on root view to prevent AbsListView setMargins crash)
+  -- Jieshuo Max Compatible Layout for LuaAdapter (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -880,9 +880,8 @@ function updatePublicFeedUI()
       {
         TextView;
         id = "msgSender";
-        textSize = "13sp";
+        textSize = "14sp";
         textColor = "#0288D1";
-        textStyle = "bold";
         layout_weight = "1";
       };
       {
@@ -897,7 +896,7 @@ function updatePublicFeedUI()
       id = "msgText";
       textSize = "16sp";
       textColor = "#111111";
-      layout_marginTop = "4dp";
+      paddingTop = "4dp";
     };
   }
   
@@ -1064,7 +1063,7 @@ function fetchPrivateChatThread(targetUsername)
 end
 
 function updatePrivateChatUI(targetUsername)
-  -- Fixed layout for LuaAdapter inside ListView (No layout_marginBottom on root view to prevent AbsListView setMargins crash)
+  -- Jieshuo Max Compatible Layout for LuaAdapter (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -1080,7 +1079,6 @@ function updatePrivateChatUI(targetUsername)
         id = "msgSender";
         textSize = "12sp";
         textColor = "#757575";
-        textStyle = "bold";
         layout_weight = "1";
       };
       {
@@ -1095,7 +1093,7 @@ function updatePrivateChatUI(targetUsername)
       id = "msgText";
       textSize = "16sp";
       textColor = "#111111";
-      layout_marginTop = "4dp";
+      paddingTop = "4dp";
     };
   }
   
