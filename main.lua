@@ -17,8 +17,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.2"
-local APP_VERSION_CODE = 3
+local APP_VERSION = "1.0.3"
+local APP_VERSION_CODE = 4
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -277,26 +277,6 @@ local loginLayout = {
     backgroundColor = "#FFFFFF";
     ContentDescription = "Password edit box. Type your password here.";
   };
-  -- Server Address Field
-  {
-    TextView;
-    text = "Server Address";
-    textSize = "14sp";
-    textColor = "#777777";
-    layout_marginTop = "12dp";
-    ContentDescription = "Server Address label";
-  };
-  {
-    EditText;
-    id = "editServerUrl";
-    text = BACKEND_URL;
-    hint = "http://10.190.183.148:5000";
-    layout_width = "fill";
-    textSize = "14sp";
-    padding = "10dp";
-    backgroundColor = "#FFFFFF";
-    ContentDescription = "Server URL edit box. Pre-configured with PC Wi-Fi server address.";
-  };
   -- Login Button
   {
     Button;
@@ -304,7 +284,7 @@ local loginLayout = {
     text = "Connect to Messenger";
     layout_width = "fill";
     layout_height = "55dp";
-    layout_marginTop = "20dp";
+    layout_marginTop = "25dp";
     backgroundColor = "#1565C0";
     textColor = "#FFFFFF";
     textSize = "18sp";
@@ -630,11 +610,6 @@ function showLoginScreen()
   btnLogin.onClick = function()
     local name = editUsername.getText().toString()
     local pass = editPassword.getText().toString()
-    local customUrl = editServerUrl.getText().toString()
-    
-    if customUrl ~= "" then
-      BACKEND_URL = customUrl
-    end
     
     if name == "" or pass == "" then
       announce("Error: Please enter both a username and password.")
