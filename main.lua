@@ -2,7 +2,7 @@
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
 -- Features: Public Feed, Deterministic Private Messaging, Accessibility & Jieshuo Optimized
--- Backend: Unified Cross-Device Real-Time Sync Server & GitHub Serverless Backup
+-- Backend: Unified Cross-Device Real-Time Sync & GitHub Remote Auto-Updates
 -- ====================================================================
 
 require "import"
@@ -17,6 +17,12 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
+local APP_VERSION = "1.0.0"
+local APP_VERSION_CODE = 1
+
+local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
+local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
+
 -- Local PC Wi-Fi Server IP (Connects physical Android phones & PC instantly)
 local BACKEND_URL = "http://10.190.183.148:5000"
 
@@ -94,10 +100,64 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
+-- REMOTE AUTO-UPDATE ENGINE (GitHub Hot Reloading)
+-- --------------------------------------------------------------------
+function checkForRemoteUpdates(manualCheck)
+  if manualCheck then
+    announce("Checking GitHub for remote updates...")
+  end
+  
+  local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
+  Http.get(checkUrl, function(code, content)
+    if code == 200 then
+      local manifest = decodeJSON(content)
+      if manifest and manifest.version_code then
+        local remoteCode = tonumber(manifest.version_code) or 1
+        if remoteCode > APP_VERSION_CODE then
+          local versionStr = manifest.version or tostring(remoteCode)
+          announce("New update found: Version " .. versionStr .. ". Downloading live update from GitHub...")
+          
+          -- Download latest main.lua script from GitHub
+          local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
+          Http.get(updateUrl, function(uCode, uContent)
+            if uCode == 200 and uContent and uContent ~= "" then
+              pcall(function()
+                local savePath = activity.getFilesDir().getAbsolutePath() .. "/main.lua"
+                local file = io.open(savePath, "w")
+                if file then
+                  file:write(uContent)
+                  file:close()
+                end
+              end)
+              
+              announce("Update v" .. versionStr .. " downloaded! Hot reloading application...")
+              
+              -- Instant Hot Reloading in AndroLua+
+              pcall(function()
+                local func, err = loadstring(uContent)
+                if func then
+                  func()
+                end
+              end)
+            else
+              announce("Failed to download update script. Please try again.")
+            end
+          end)
+          return
+        end
+      end
+    end
+    
+    if manualCheck then
+      announce("You are using the latest version of Accessible Messenger (v" .. APP_VERSION .. ").")
+    end
+  end)
+end
+
+-- --------------------------------------------------------------------
 -- UNIFIED NETWORKING ENGINE (Local Server + GitHub Fallback)
 -- --------------------------------------------------------------------
 function apiGet(endpoint, githubFilePath, callback)
-  -- Priority 1: Unified Server (Instant 0-delay local Wi-Fi cross-device sync)
   Http.get(BACKEND_URL .. endpoint, function(code, content)
     if code == 200 then
       local res = decodeJSON(content)
@@ -107,7 +167,6 @@ function apiGet(endpoint, githubFilePath, callback)
       end
     end
     
-    -- Priority 2: GitHub API
     local apiUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
       GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, githubFilePath, os.time())
     Http.get(apiUrl, function(c2, cnt2)
@@ -122,8 +181,6 @@ end
 
 function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
-  
-  -- Priority 1: Unified Server
   Http.post(BACKEND_URL .. endpoint, payloadStr, function(code, content)
     if code == 200 or code == 201 then
       callback(true)
@@ -154,12 +211,12 @@ local loginLayout = {
   };
   {
     TextView;
-    text = "Unified Real-Time Anonymous Login";
+    text = "Unified Anonymous Login (v" .. APP_VERSION .. ")";
     textSize = "16sp";
     textColor = "#555555";
     layout_gravity = "center";
     layout_marginBottom = "15dp";
-    ContentDescription = "Subtitle: Unified Real-Time Anonymous Login";
+    ContentDescription = "Subtitle: Anonymous Login version " .. APP_VERSION;
   };
   -- Username Input
   {
@@ -223,12 +280,25 @@ local loginLayout = {
     id = "btnLogin";
     text = "Connect to Messenger";
     layout_width = "fill";
-    layout_height = "60dp";
-    layout_marginTop = "20dp";
+    layout_height = "55dp";
+    layout_marginTop = "15dp";
     backgroundColor = "#1565C0";
     textColor = "#FFFFFF";
     textSize = "18sp";
     ContentDescription = "Connect to Messenger button. Double tap to sign in.";
+  };
+  -- Check for Remote Updates Button
+  {
+    Button;
+    id = "btnCheckUpdate";
+    text = "🔄 Check for Remote Updates";
+    layout_width = "fill";
+    layout_height = "45dp";
+    layout_marginTop = "10dp";
+    backgroundColor = "#455A64";
+    textColor = "#FFFFFF";
+    textSize = "14sp";
+    ContentDescription = "Check for Remote Updates button. Double tap to check GitHub for updates.";
   };
 }
 
@@ -255,12 +325,12 @@ local dashboardLayout = {
   {
     TextView;
     id = "txtLoggedAs";
-    text = "Status: Connected";
+    text = "Status: Connected (v" .. APP_VERSION .. ")";
     textSize = "15sp";
     textColor = "#2E7D32";
     layout_gravity = "center";
-    layout_marginBottom = "25dp";
-    ContentDescription = "Status indicator: Connected to unified server.";
+    layout_marginBottom = "20dp";
+    ContentDescription = "Status indicator: Connected.";
   };
   
   -- Public Feed Button
@@ -269,8 +339,8 @@ local dashboardLayout = {
     id = "btnOpenPublicFeed";
     text = "🌐 Public Feed";
     layout_width = "fill";
-    layout_height = "70dp";
-    layout_marginBottom = "20dp";
+    layout_height = "65dp";
+    layout_marginBottom = "15dp";
     backgroundColor = "#0288D1";
     textColor = "#FFFFFF";
     textSize = "18sp";
@@ -283,22 +353,35 @@ local dashboardLayout = {
     id = "btnOpenPrivateChats";
     text = "💬 Private Chats & Online Users";
     layout_width = "fill";
-    layout_height = "70dp";
-    layout_marginBottom = "20dp";
+    layout_height = "65dp";
+    layout_marginBottom = "15dp";
     backgroundColor = "#2E7D32";
     textColor = "#FFFFFF";
     textSize = "18sp";
     ContentDescription = "Private Chats button. Double tap to view online users and chat privately.";
   };
   
+  -- Check Updates Button on Home
+  {
+    Button;
+    id = "btnCheckUpdateHome";
+    text = "🔄 Check for GitHub Updates";
+    layout_width = "fill";
+    layout_height = "50dp";
+    layout_marginBottom = "15dp";
+    backgroundColor = "#455A64";
+    textColor = "#FFFFFF";
+    textSize = "15sp";
+    ContentDescription = "Check for GitHub Updates button. Double tap to check for app updates.";
+  };
+
   -- Logout Button
   {
     Button;
     id = "btnLogout";
     text = "Disconnect / Logout";
     layout_width = "fill";
-    layout_height = "55dp";
-    layout_marginTop = "20dp";
+    layout_height = "50dp";
     backgroundColor = "#D32F2F";
     textColor = "#FFFFFF";
     textSize = "16sp";
@@ -508,6 +591,13 @@ function showLoginScreen()
   isPolling = false
   activity.setContentView(loadlayout(loginLayout))
   
+  -- Auto-check for remote updates on startup
+  checkForRemoteUpdates(false)
+  
+  btnCheckUpdate.onClick = function()
+    checkForRemoteUpdates(true)
+  end
+  
   btnLogin.onClick = function()
     local name = editUsername.getText().toString()
     local pass = editPassword.getText().toString()
@@ -538,7 +628,7 @@ function showDashboardScreen()
   activeScreen = "dashboard"
   activity.setContentView(loadlayout(dashboardLayout))
   
-  txtLoggedAs.setText("Logged in as: " .. currentUser.name)
+  txtLoggedAs.setText("Logged in as: " .. currentUser.name .. " (v" .. APP_VERSION .. ")")
   txtLoggedAs.setContentDescription("Logged in as " .. currentUser.name)
   
   btnOpenPublicFeed.onClick = function()
@@ -549,6 +639,10 @@ function showDashboardScreen()
   btnOpenPrivateChats.onClick = function()
     announce("Opening Private Chats Directory")
     showPrivateDirectoryScreen()
+  end
+  
+  btnCheckUpdateHome.onClick = function()
+    checkForRemoteUpdates(true)
   end
   
   btnLogout.onClick = function()
@@ -842,10 +936,8 @@ function startPollingLoop()
   local function poll()
     if not currentUser.online or not isPolling then return end
     
-    -- Pulse Heartbeat Presence
     updateOnlinePresence()
     
-    -- Pulse Screen Data Refresh
     if activeScreen == "public_feed" then
       fetchPublicFeedMessages()
     elseif activeScreen == "private_directory" then
@@ -854,7 +946,6 @@ function startPollingLoop()
       fetchPrivateChatThread(activeChatTarget)
     end
     
-    -- Schedule next 2.5s pulse
     Handler().postDelayed(Runnable{ run = poll }, 2500)
   end
   
