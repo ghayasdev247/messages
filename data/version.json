@@ -1,7 +1,7 @@
 {
-  "version": "1.0.7",
-  "version_code": 8,
+  "version": "1.0.8",
+  "version_code": 9,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 1.0.7: Fixed AbsListView setMargins layout crash in LuaAdapter for Jieshuo Max."
+  "changelog": "Version 1.0.8: Removed textStyle and layout_margin attributes from LuaAdapter layout to prevent setTextStyle and setMargins errors in Jieshuo Max."
 }
