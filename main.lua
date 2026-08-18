@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.3.0 (Build Code: 16)
--- Features: WhatsApp Hold-to-Record Voice Button, Single-Tap Audio Playback,
---           Long-Press Context Menu, Ephemeral Storage & Firebase Sync
+-- Version: 1.4.0 (Build Code: 17)
+-- Features: Android Voice Note Download & Auto-Play Engine, Base64 Decoder,
+--           WhatsApp Hold-to-Record Voice Button & Long-Press Options Menu
 -- ====================================================================
 
 require "import"
@@ -18,8 +18,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.3.0"
-local APP_VERSION_CODE = 16
+local APP_VERSION = "1.4.0"
+local APP_VERSION_CODE = 17
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -117,6 +117,7 @@ end
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
 function base64Encode(data)
+  if not data or data == "" then return "" end
   return ((data:gsub('.', function(x) 
     local r,b='',x:byte()
     for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
@@ -130,6 +131,7 @@ function base64Encode(data)
 end
 
 function base64Decode(data)
+  if not data or data == "" then return "" end
   data = string.gsub(data, '[^'..b64chars..'=]', '')
   return (data:gsub('=', ''):gsub('.', function(x)
     if (x == '=') then return '' end
@@ -496,35 +498,84 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- VOICE NOTE ENGINE & AUDIO PLAYBACK (Single Tap & Base64 Decoder)
+-- ANDROID VOICE NOTE DOWNLOAD & AUTO-PLAYBACK ENGINE (Base64 -> Storage)
 -- --------------------------------------------------------------------
-function playVoiceNote(audioSource)
+function downloadAndPlayVoiceNote(msgItem)
   import "android.media.MediaPlayer"
-  if not audioSource or audioSource == "" then
-    announce("No voice audio file found.")
+  import "android.widget.Toast"
+  
+  if not msgItem then return end
+  local audioData = msgItem.audio or msgItem.voicePath
+  
+  if not audioData or audioData == "" then
+    announce("Error: Voice note audio data not found.")
     return
   end
   
+  announce("Downloading voice note...")
+  
+  -- Create dedicated voice notes download folder
+  local voiceFolder = "/sdcard/Download/Accessible_Messenger_Voice"
   pcall(function()
-    local playPath = audioSource
-    -- Handle Base64 encoded audio strings or data URIs
-    if string.sub(audioSource, 1, 5) == "data:" or string.len(audioSource) > 200 then
-      local cleanB64 = audioSource:gsub("^data:audio/[%w%+]+;base64,", "")
-      local decoded = base64Decode(cleanB64)
-      playPath = activity.getCacheDir().getAbsolutePath() .. "/temp_voice_play.3gp"
-      local f = io.open(playPath, "wb")
-      if f then
-        f:write(decoded)
-        f:close()
-      end
-    end
-    
-    local mp = MediaPlayer()
-    mp.setDataSource(playPath)
-    mp.prepare()
-    mp.start()
-    announce("Playing voice note...")
+    import "android.os.Environment"
+    local baseDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
+    voiceFolder = baseDownload .. "/Accessible_Messenger_Voice"
   end)
+  
+  pcall(function()
+    local File = luajava.bindClass("java.io.File")
+    local folder = File(voiceFolder)
+    if not folder.exists() then folder.mkdirs() end
+  end)
+  
+  local targetAudioFile = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
+  local isFileReady = false
+  
+  -- 1. If audioData is already an existing local file on device
+  pcall(function()
+    local File = luajava.bindClass("java.io.File")
+    local fObj = File(audioData)
+    if fObj.exists() and fObj.length() > 0 then
+      targetAudioFile = audioData
+      isFileReady = true
+    end
+  end)
+  
+  -- 2. If audioData is a Base64 string downloaded from Firebase/GitHub cloud
+  if not isFileReady then
+    pcall(function()
+      local cleanB64 = audioData:gsub("^data:audio/[%w%+]+;base64,", "")
+      local decodedBytes = base64Decode(cleanB64)
+      if decodedBytes and #decodedBytes > 0 then
+        local f = io.open(targetAudioFile, "wb")
+        if f then
+          f:write(decodedBytes)
+          f:close()
+          isFileReady = true
+        end
+      end
+    end)
+  end
+  
+  if isFileReady then
+    announce("Voice note downloaded. Playing audio now...")
+    pcall(function()
+      local mp = MediaPlayer()
+      mp.reset()
+      mp.setDataSource(targetAudioFile)
+      mp.prepare()
+      mp.start()
+      
+      mp.setOnCompletionListener(MediaPlayer.OnCompletionListener{
+        onCompletion = function(player)
+          announce("Voice note playback finished.")
+          player.release()
+        end
+      })
+    end)
+  else
+    announce("Failed to download voice note audio file.")
+  end
 end
 
 function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
@@ -825,7 +876,7 @@ local dashboardLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 3. PUBLIC FEED SCREEN LAYOUT (WHATSAPP HOLD-TO-RECORD BUTTON)
+-- 3. PUBLIC FEED SCREEN LAYOUT
 -- --------------------------------------------------------------------
 local publicFeedLayout = {
   LinearLayout;
@@ -967,7 +1018,7 @@ local privateDirectoryLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 5. PRIVATE CHAT ROOM LAYOUT (WHATSAPP LOWER RIGHT VOICE BUTTON)
+-- 5. PRIVATE CHAT ROOM LAYOUT
 -- --------------------------------------------------------------------
 local chatLayout = {
   LinearLayout;
@@ -1118,7 +1169,6 @@ function showDashboardScreen()
   end
   
   btnLogout.onClick = function()
-    -- Strict Ephemeral Reset: Clear memory feeds on logout
     currentUser.name = ""
     currentUser.online = false
     isPolling = false
@@ -1247,13 +1297,13 @@ function updatePublicFeedUI()
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listPublicMessages.setAdapter(adapter)
   
-  -- SINGLE TAP: Immediate Voice Note Audio Playback / Speech Read
+  -- SINGLE TAP: Immediate Voice Download & Auto Playback
   listPublicMessages.onItemClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = publicFeedMessages[idx]
     if selectedMsg then
       if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
-        playVoiceNote(selectedMsg.audio or selectedMsg.voicePath)
+        downloadAndPlayVoiceNote(selectedMsg)
       else
         announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
       end
@@ -1302,7 +1352,6 @@ function fetchOnlineUsersList()
           local lastSeen = tonumber(u.last_seen or 0) or 0
           local isOnline = u.status == "Online" or u.online == true or (now_ts - lastSeen <= 70)
           
-          -- STRICT FILTER: Show ONLY currently active online users (Hide offline users)
           if name and name ~= currentUser.name and isOnline then
             table.insert(filtered, {
               name = name,
@@ -1494,13 +1543,13 @@ function updatePrivateChatUI(targetUsername)
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listChatMessages.setAdapter(adapter)
   
-  -- SINGLE TAP: Immediate Voice Note Audio Playback / Speech Read
+  -- SINGLE TAP: Immediate Voice Download & Auto Playback
   listChatMessages.onItemClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = msgs[idx]
     if selectedMsg then
       if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
-        playVoiceNote(selectedMsg.audio or selectedMsg.voicePath)
+        downloadAndPlayVoiceNote(selectedMsg)
       else
         announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
       end
