@@ -1,8 +1,8 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Features: Stable Screen Reader Focus, Public Feed, Private Messaging, Modern UI Layout
--- Backend: Unified Cross-Device Real-Time Sync & Dual Network Auto-Updates (Local Wi-Fi + GitHub)
+-- Features: Public Feed, Deterministic Private Messaging, Focus Stability, Card UI Layout
+-- Backend: Unified Cross-Device Real-Time Sync & Remote Auto-Updates (Local Wi-Fi + GitHub)
 -- ====================================================================
 
 require "import"
@@ -102,21 +102,22 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- DUAL NETWORK AUTO-UPDATE ENGINE (Local Wi-Fi + GitHub Remote)
+-- DUAL NETWORK REMOTE AUTO-UPDATE ENGINE (Local Wi-Fi + GitHub Remote)
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
-    announce("Checking for updates on Local Wi-Fi Network & GitHub...")
+    announce("Checking GitHub and Local Network for new updates...")
   end
   
+  -- Priority 1: Check Local Wi-Fi Network Update API
   Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
     if lCode == 200 then
       local manifest = decodeJSON(lContent)
       if manifest and manifest.version_code then
         local remoteCode = tonumber(manifest.version_code) or 1
-        if remoteCode > APP_VERSION_CODE then
+        if remoteCode > APP_VERSION_CODE or (manualCheck and remoteCode >= APP_VERSION_CODE) then
           local versionStr = manifest.version or tostring(remoteCode)
-          announce("New update found on Local Network: Version " .. versionStr .. ". Downloading update...")
+          announce("Downloading update Version " .. versionStr .. " from Local Server...")
           
           Http.get(BACKEND_URL .. "/api/download-lua", function(uCode, uContent)
             if uCode == 200 and uContent and uContent ~= "" then
@@ -129,15 +130,16 @@ function checkForRemoteUpdates(manualCheck)
       end
     end
     
+    -- Priority 2: Check GitHub Remote Update API
     local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
     Http.get(checkUrl, function(code, content)
       if code == 200 then
         local manifest = decodeJSON(content)
         if manifest and manifest.version_code then
           local remoteCode = tonumber(manifest.version_code) or 1
-          if remoteCode > APP_VERSION_CODE then
+          if remoteCode > APP_VERSION_CODE or (manualCheck and remoteCode >= APP_VERSION_CODE) then
             local versionStr = manifest.version or tostring(remoteCode)
-            announce("New update found on GitHub: Version " .. versionStr .. ". Downloading update...")
+            announce("Downloading update Version " .. versionStr .. " from GitHub...")
             
             local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
             Http.get(updateUrl, function(uCode, uContent)
@@ -216,7 +218,7 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- 1. LOGIN / IDENTITY SCREEN LAYOUT (Modern Design & Accessible)
+-- 1. LOGIN / IDENTITY SCREEN LAYOUT
 -- --------------------------------------------------------------------
 local loginLayout = {
   LinearLayout;
@@ -453,7 +455,7 @@ local publicFeedLayout = {
       ContentDescription = "Public Feed room.";
     };
   };
-  -- Messages List (Stable Focus Configuration)
+  -- Messages List
   {
     ListView;
     id = "listPublicMessages";
@@ -578,7 +580,7 @@ local chatLayout = {
       ContentDescription = "Currently chatting in private room.";
     };
   };
-  -- Message History List (Stable Focus Configuration)
+  -- Message History List
   {
     ListView;
     id = "listChatMessages";
@@ -620,7 +622,7 @@ local chatLayout = {
 }
 
 -- --------------------------------------------------------------------
--- SCREEN CONTROLLERS & STABLE FOCUS UI UPDATES
+-- SCREEN CONTROLLERS
 -- --------------------------------------------------------------------
 
 function showLoginScreen()
@@ -691,7 +693,7 @@ function showDashboardScreen()
 end
 
 -- --------------------------------------------------------------------
--- PUBLIC FEED CONTROLLER (Focus Stability Fix)
+-- PUBLIC FEED CONTROLLER
 -- --------------------------------------------------------------------
 function showPublicFeedScreen()
   activeScreen = "public_feed"
@@ -739,7 +741,6 @@ function fetchPublicFeedMessages()
       lastPublicMessageCount = newCount
       publicFeedMessages = data
       
-      -- Focus Stability Fix: ONLY update adapter when count changes!
       if activeScreen == "public_feed" and lastRenderedPublicCount ~= newCount then
         lastRenderedPublicCount = newCount
         updatePublicFeedUI()
@@ -880,7 +881,7 @@ function updatePrivateDirectoryUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER (Focus Stability Fix)
+-- PRIVATE CHAT ROOM CONTROLLER
 -- --------------------------------------------------------------------
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
@@ -938,7 +939,6 @@ function fetchPrivateChatThread(targetUsername)
       lastPrivateMessageCount = newCount
       privateChatHistory[targetUsername] = data
       
-      -- Focus Stability Fix: ONLY update adapter when count changes!
       if activeScreen == "private_chat" and activeChatTarget == targetUsername and lastRenderedPrivateCount ~= newCount then
         lastRenderedPrivateCount = newCount
         updatePrivateChatUI(targetUsername)
