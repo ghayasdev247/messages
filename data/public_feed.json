@@ -33,5 +33,10 @@
     "sender": "ggg",
     "text": "hi",
     "time": "11:32 PM"
+  },
+  {
+    "sender": "MobileUser",
+    "text": "Mobile test message v1.0.6",
+    "time": "01:04 AM"
   }
 ]
