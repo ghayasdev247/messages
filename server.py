@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.4.0",
-                "version_code": 17,
+                "version": "1.5.0",
+                "version_code": 18,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.4.0: Android Voice Note Download & Auto-Play Engine with Base64 File Storage."
+                "changelog": "Version 1.5.0: Strict Cloud Auto-Purge on Exit/Disconnect and Active Presence Auto-Cleaner."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

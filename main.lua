@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.4.0 (Build Code: 17)
--- Features: Android Voice Note Download & Auto-Play Engine, Base64 Decoder,
---           WhatsApp Hold-to-Record Voice Button & Long-Press Options Menu
+-- Version: 1.5.0 (Build Code: 18)
+-- Features: Strict Cloud Auto-Purge on Exit/Disconnect, Active Presence Auto-Cleaner,
+--           Android Voice Note Download & Auto-Play Engine
 -- ====================================================================
 
 require "import"
@@ -18,8 +18,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.4.0"
-local APP_VERSION_CODE = 17
+local APP_VERSION = "1.5.0"
+local APP_VERSION_CODE = 18
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -151,6 +151,18 @@ function announce(text)
     Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
     activity.getWindow().getDecorView().announceForAccessibility(text)
   end)
+end
+
+-- --------------------------------------------------------------------
+-- CLOUD AUTO-PURGE ENGINE (Server Cleanup on Exit / Logout)
+-- --------------------------------------------------------------------
+function purgeCloudFeed(path)
+  local fbPath = path:gsub("%.json$", "")
+  local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json"
+  
+  -- Send HTTP PUT with empty array b'[]' to purge server data
+  Http.post(fbUrl, "[]", function(code, content) end)
+  commitGitHubFile(path, {}, "Purged ephemeral feed", function() end)
 end
 
 -- --------------------------------------------------------------------
@@ -514,7 +526,6 @@ function downloadAndPlayVoiceNote(msgItem)
   
   announce("Downloading voice note...")
   
-  -- Create dedicated voice notes download folder
   local voiceFolder = "/sdcard/Download/Accessible_Messenger_Voice"
   pcall(function()
     import "android.os.Environment"
@@ -531,7 +542,6 @@ function downloadAndPlayVoiceNote(msgItem)
   local targetAudioFile = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
   local isFileReady = false
   
-  -- 1. If audioData is already an existing local file on device
   pcall(function()
     local File = luajava.bindClass("java.io.File")
     local fObj = File(audioData)
@@ -541,7 +551,6 @@ function downloadAndPlayVoiceNote(msgItem)
     end
   end)
   
-  -- 2. If audioData is a Base64 string downloaded from Firebase/GitHub cloud
   if not isFileReady then
     pcall(function()
       local cleanB64 = audioData:gsub("^data:audio/[%w%+]+;base64,", "")
@@ -1169,6 +1178,8 @@ function showDashboardScreen()
   end
   
   btnLogout.onClick = function()
+    -- Strict Server Auto-Purge: Wipe presence and reset local memory on logout
+    postFirebaseData("data/online_users", {}, function() end)
     currentUser.name = ""
     currentUser.online = false
     isPolling = false
@@ -1188,6 +1199,9 @@ function showPublicFeedScreen()
   activity.setContentView(loadlayout(publicFeedLayout))
   
   btnPublicToHome.onClick = function()
+    -- Strict Server Auto-Purge: Wipe unsaved public messages from cloud when leaving
+    purgeCloudFeed("data/public_feed.json")
+    publicFeedMessages = {}
     announce("Returning to Home Dashboard")
     showDashboardScreen()
   end
@@ -1350,8 +1364,9 @@ function fetchOnlineUsersList()
         if type(u) == "table" then
           local name = u.name or u.username
           local lastSeen = tonumber(u.last_seen or 0) or 0
-          local isOnline = u.status == "Online" or u.online == true or (now_ts - lastSeen <= 70)
+          local isOnline = (now_ts - lastSeen <= 60) and (u.status == "Online" or u.online == true)
           
+          -- STRICT FILTER: Show ONLY currently active online users (Hide offline users)
           if name and name ~= currentUser.name and isOnline then
             table.insert(filtered, {
               name = name,
@@ -1456,6 +1471,10 @@ function showPrivateChatScreen(targetUsername)
   end
   
   btnBackToPrivateList.onClick = function()
+    -- Strict Server Auto-Purge: Wipe unsaved private messages from cloud when leaving
+    local chatPath = getChatFilePath(currentUser.name, targetUsername)
+    purgeCloudFeed(chatPath)
+    privateChatHistory[targetUsername] = nil
     activeChatTarget = ""
     announce("Returning to active online users directory")
     showPrivateDirectoryScreen()
@@ -1501,7 +1520,7 @@ function updatePrivateChatUI(targetUsername)
       {
         TextView;
         id = "msgSender";
-        textSize = "13sp";
+        textSize = "14sp";
         textColor = "#075E54";
         layout_weight = "1";
       };
