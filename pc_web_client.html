@@ -3,30 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Accessible Messenger - Stable Focus JAWS & NVDA Web Client</title>
+  <title>Accessible Messenger - NVDA & JAWS Web Client (v1.2.0)</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, Helvetica, sans-serif; background-color: #eef2f5; margin: 0; padding: 20px; color: #222; }
-    .container { max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); padding: 24px; border: 1px solid #dcdcdc; }
-    h1 { font-size: 24px; color: #1565C0; text-align: center; margin-top: 0; }
+    .container { max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); padding: 24px; border: 1px solid #dcdcdc; }
+    h1 { font-size: 24px; color: #075E54; text-align: center; margin-top: 0; }
     h2 { font-size: 16px; color: #555; text-align: center; margin-bottom: 20px; }
     .hidden { display: none !important; }
     label { font-weight: bold; display: block; margin-top: 15px; font-size: 14px; }
     input[type="text"], input[type="password"] { width: 100%; padding: 12px 14px; margin-top: 6px; font-size: 16px; border: 1px solid #b0bec5; border-radius: 6px; background-color: #fff; }
-    input[type="text"]:focus, input[type="password"]:focus { border-color: #1565C0; outline: 2px solid #1565C0; }
-    button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-weight: bold; color: #fff; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; }
+    input[type="text"]:focus, input[type="password"]:focus { border-color: #075E54; outline: 2px solid #075E54; }
+    button { width: 100%; padding: 14px; margin-top: 15px; font-size: 16px; font-weight: bold; color: #fff; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; }
     button:focus { outline: 3px solid #FFD600; }
-    .btn-blue { background-color: #1565C0; } .btn-blue:hover { background-color: #0D47A1; }
-    .btn-green { background-color: #2E7D32; } .btn-green:hover { background-color: #1B5E20; }
+    .btn-teal { background-color: #075E54; } .btn-teal:hover { background-color: #054840; }
+    .btn-green { background-color: #128C7E; } .btn-green:hover { background-color: #0e6e63; }
     .btn-red { background-color: #D32F2F; } .btn-red:hover { background-color: #B71C1C; }
-    .msg-box { height: 340px; border: 1px solid #cfd8dc; overflow-y: auto; padding: 12px; margin: 15px 0; background: #f4f6f8; border-radius: 8px; }
-    .msg-card { background: #ffffff; padding: 10px 14px; margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #0288D1; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    .msg-card.me { border-left: 4px solid #2E7D32; background: #e8f5e9; }
-    .msg-sender { font-weight: bold; font-size: 13px; color: #0288D1; margin-bottom: 4px; display: flex; justify-content: space-between; }
-    .msg-sender.me { color: #2E7D32; }
+    .btn-gray { background-color: #455A64; } .btn-gray:hover { background-color: #37474F; }
+    .msg-box { height: 360px; border: 1px solid #cfd8dc; overflow-y: auto; padding: 12px; margin: 15px 0; background: #e5ddd5; border-radius: 8px; }
+    .msg-card { background: #ffffff; padding: 10px 14px; margin-bottom: 10px; border-radius: 8px; border-left: 4px solid #075E54; box-shadow: 0 1px 3px rgba(0,0,0,0.08); cursor: pointer; }
+    .msg-card.me { border-left: 4px solid #128C7E; background: #e7ffdb; }
+    .msg-sender { font-weight: bold; font-size: 13px; color: #075E54; margin-bottom: 4px; display: flex; justify-content: space-between; }
+    .msg-sender.me { color: #128C7E; }
     .msg-text { font-size: 16px; color: #111; word-wrap: break-word; }
     .user-list-item { padding: 14px; border-bottom: 1px solid #e0e0e0; cursor: pointer; font-size: 16px; font-weight: bold; background: #fff; margin-bottom: 4px; border-radius: 6px; }
-    .user-list-item:focus { outline: 3px solid #1565C0; background: #e3f2fd; }
+    .user-list-item:focus { outline: 3px solid #075E54; background: #e8f5e9; }
     .sr-only { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
   </style>
 </head>
@@ -34,13 +35,13 @@
 
 <div class="container" role="main">
 
-  <!-- Live Announcer Region for Screen Readers (JAWS & NVDA) -->
+  <!-- Live Announcer Region for Screen Readers (NVDA & JAWS WAI-ARIA) -->
   <div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
   <!-- 1. LOGIN SCREEN -->
   <div id="screen-login">
     <h1>Accessible Messenger</h1>
-    <h2>Web Client for JAWS & NVDA</h2>
+    <h2>NVDA & JAWS Web Client (v1.2.0)</h2>
 
     <label for="username">Step 1: Enter Username</label>
     <input type="text" id="username" placeholder="Type alias or handle" aria-label="Username edit box. Type alias here.">
@@ -48,78 +49,90 @@
     <label for="password">Step 2: Enter Password</label>
     <input type="password" id="password" placeholder="Type password" aria-label="Password edit box. Type password here.">
 
-    <label for="token">GitHub Token (Optional for direct GitHub write)</label>
+    <label for="token">GitHub Token (Optional for write fallback)</label>
     <input type="text" id="token" placeholder="ghp_xxxxxxxxxxxx" aria-label="GitHub Personal Access Token field.">
 
-    <button id="btn-login" class="btn-blue" onclick="onLogin()">Connect to Messenger</button>
+    <button id="btn-login" class="btn-teal" onclick="onLogin()">Connect to Cloud Messenger</button>
   </div>
 
   <!-- 2. DASHBOARD SCREEN -->
   <div id="screen-dashboard" class="hidden">
-    <h1>Messenger Home</h1>
+    <h1>Messenger Main Home</h1>
     <p id="txt-status" style="text-align:center; color:#2E7D32; font-weight:bold; font-size:16px;"></p>
 
-    <button class="btn-blue" onclick="showPublicFeed()">🌐 Public Feed</button>
-    <button class="btn-green" onclick="showPrivateDirectory()">💬 Private Chats & Online Users</button>
+    <button class="btn-green" onclick="showPublicFeed()">🌐 Public Feed</button>
+    <button class="btn-teal" onclick="showPrivateDirectory()">💬 Active Online Users (Directory)</button>
     <button class="btn-red" onclick="onLogout()">Disconnect / Logout</button>
   </div>
 
   <!-- 3. PUBLIC FEED SCREEN -->
   <div id="screen-public" class="hidden">
-    <div style="display:flex; align-items:center; background:#0288D1; color:#fff; padding:12px; border-radius:8px;">
-      <button style="width:auto; margin:0; padding:8px 14px;" onclick="showDashboard()">&lt; Home</button>
-      <h2 style="margin:0 0 0 15px; font-size:18px; color:#fff;">Public Feed</h2>
+    <div style="display:flex; align-items:center; background:#075E54; color:#fff; padding:12px; border-radius:8px; justify-content:space-between;">
+      <button style="width:auto; margin:0; padding:8px 14px;" class="btn-teal" onclick="showDashboard()">&lt; Home</button>
+      <h2 style="margin:0; font-size:18px; color:#fff;">Public Feed</h2>
+      <button style="width:auto; margin:0; padding:8px 14px;" class="btn-green" onclick="saveCurrentChatLocal('PublicFeed', publicMessages)">📥 Save</button>
     </div>
 
     <div id="public-msg-box" class="msg-box" role="log" aria-label="Public feed message history list." tabindex="0"></div>
 
-    <div style="display:flex;">
+    <div style="display:flex; gap:6px;">
       <input type="text" id="public-input" placeholder="Type public message..." aria-label="Public message input box." onkeypress="if(event.key==='Enter') postPublicMsg()">
-      <button id="btn-post-public" class="btn-blue" style="width:auto; margin:0 0 0 10px; padding:0 24px;" onclick="postPublicMsg()">Post</button>
+      <button id="btn-voice-public" class="btn-gray" style="width:auto; margin:0; padding:0 14px;" onclick="toggleVoiceRecord('public')">🎙️ Voice</button>
+      <button id="btn-post-public" class="btn-teal" style="width:auto; margin:0; padding:0 20px;" onclick="postPublicMsg()">Post</button>
     </div>
   </div>
 
   <!-- 4. PRIVATE DIRECTORY SCREEN -->
   <div id="screen-directory" class="hidden">
     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:15px;">
-      <button style="width:auto; margin:0; padding:8px 14px;" onclick="showDashboard()">&lt; Home</button>
-      <h2 style="margin:0; font-size:18px; color:#111;">Online Users</h2>
-      <button style="width:auto; margin:0; padding:8px 14px;" onclick="fetchUsers()">Refresh</button>
+      <button style="width:auto; margin:0; padding:8px 14px;" class="btn-gray" onclick="showDashboard()">&lt; Home</button>
+      <h2 style="margin:0; font-size:18px; color:#075E54;">Active Online Users</h2>
+      <button style="width:auto; margin:0; padding:8px 14px;" class="btn-teal" onclick="fetchUsers()">Refresh</button>
     </div>
 
-    <div id="user-list-box" style="height:340px; border:1px solid #ccc; overflow-y:auto;" role="list" aria-label="Online users list." tabindex="0"></div>
+    <div id="user-list-box" style="height:360px; border:1px solid #ccc; overflow-y:auto;" role="list" aria-label="Active online users list." tabindex="0"></div>
   </div>
 
   <!-- 5. PRIVATE CHAT ROOM SCREEN -->
   <div id="screen-chat" class="hidden">
-    <div style="display:flex; align-items:center; background:#37474F; color:#fff; padding:12px; border-radius:8px;">
-      <button style="width:auto; margin:0; padding:8px 14px; background:#455A64;" onclick="showPrivateDirectory()">&lt; Directory</button>
-      <h2 id="chat-header" style="margin:0 0 0 15px; font-size:18px; color:#fff;">Private Chat</h2>
+    <div style="display:flex; align-items:center; background:#075E54; color:#fff; padding:12px; border-radius:8px; justify-content:space-between;">
+      <button style="width:auto; margin:0; padding:8px 14px;" class="btn-teal" onclick="showPrivateDirectory()">&lt; Directory</button>
+      <h2 id="chat-header" style="margin:0; font-size:18px; color:#fff;">Private Chat</h2>
+      <button style="width:auto; margin:0; padding:8px 14px;" class="btn-green" onclick="saveCurrentChatLocal('PrivateChat', privateMessages)">📥 Save</button>
     </div>
 
     <div id="private-msg-box" class="msg-box" role="log" aria-label="Private message history." tabindex="0"></div>
 
-    <div style="display:flex;">
+    <div style="display:flex; gap:6px;">
       <input type="text" id="private-input" placeholder="Type private message..." aria-label="Private message input box." onkeypress="if(event.key==='Enter') postPrivateMsg()">
-      <button id="btn-send-private" class="btn-green" style="width:auto; margin:0 0 0 10px; padding:0 24px;" onclick="postPrivateMsg()">Send</button>
+      <button id="btn-voice-private" class="btn-gray" style="width:auto; margin:0; padding:0 14px;" onclick="toggleVoiceRecord('private')">🎙️ Voice</button>
+      <button id="btn-send-private" class="btn-teal" style="width:auto; margin:0; padding:0 20px;" onclick="postPrivateMsg()">Send</button>
     </div>
   </div>
 
 </div>
 
 <script>
+  const FIREBASE_URL = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app";
   const GITHUB_OWNER = "ghayasdev247";
   const GITHUB_REPO = "messages";
   const GITHUB_BRANCH = "main";
-  const LOCAL_BACKEND = "http://localhost:5000";
+  const LOCAL_BACKEND = "http://10.20.244.148:5000";
 
   let currentUser = { name: "", token: "", online: false };
   let activeScreen = "login";
   let activeChatTarget = "";
+
+  let publicMessages = [];
+  let privateMessages = [];
   let renderedPublicCount = -1;
   let renderedPrivateCount = -1;
+
   let pollTimer = null;
   let heartbeatTimer = null;
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let isRecording = false;
 
   function speak(text) {
     const announcer = document.getElementById("sr-announcer");
@@ -130,39 +143,40 @@
     return (u1.toLowerCase() < u2.toLowerCase()) ? `data/chats/${u1}_${u2}.json` : `data/chats/${u2}_${u1}.json`;
   }
 
-  async function fetchFile(path) {
+  async function fetchFirebase(path) {
+    const cleanPath = path.replace(".json", "");
+    const url = `${FIREBASE_URL}/${cleanPath}.json?t=${Date.now()}`;
     try {
-      let endpoint = "";
-      if (path === "data/public_feed.json") endpoint = "/api/public-feed";
-      else if (path === "data/online_users.json") endpoint = "/api/online-users?user=" + encodeURIComponent(currentUser.name);
-      else if (path.startsWith("data/chats/")) {
-        const file = path.replace("data/chats/", "").replace(".json", "");
-        const parts = file.split("_");
-        if (parts.length === 2) endpoint = `/api/private-messages?user=${encodeURIComponent(parts[0])}&target=${encodeURIComponent(parts[1])}`;
-      }
-
-      if (endpoint) {
-        const localRes = await fetch(LOCAL_BACKEND + endpoint);
-        if (localRes.ok) {
-          const resData = await localRes.json();
-          if (resData.success && (resData.messages || resData.users)) {
-            return { success: true, data: resData.messages || resData.users, sha: null };
-          }
+      const res = await fetch(url);
+      if (res.ok) {
+        const raw = await res.json();
+        if (raw) {
+          if (Array.isArray(raw)) return { success: true, data: raw.filter(x => x && typeof x === "object") };
+          if (typeof raw === "object") return { success: true, data: Object.values(raw).filter(x => x && typeof x === "object") };
         }
       }
     } catch(e) {}
+    return { success: false, data: null };
+  }
 
-    const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}?ref=${GITHUB_BRANCH}&t=${Date.now()}`;
-    const headers = { "Cache-Control": "no-cache" };
-    if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
+  async function postFirebase(path, payload) {
+    const cleanPath = path.replace(".json", "");
+    const url = `${FIREBASE_URL}/${cleanPath}.json`;
     try {
-      const res = await fetch(url, { headers });
-      if (res.ok) {
-        const body = await res.json();
-        const jsonStr = atob(body.content.replace(/\s+/g, ''));
-        return { success: true, data: JSON.parse(jsonStr), sha: body.sha };
-      }
-    } catch(e) {}
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      return res.ok;
+    } catch(e) { return false; }
+  }
+
+  async function fetchFile(path) {
+    const fbResult = await fetchFirebase(path);
+    if (fbResult.success && fbResult.data && fbResult.data.length > 0) {
+      return { success: true, data: fbResult.data, sha: null };
+    }
 
     try {
       const rawRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${path}?t=${Date.now()}`);
@@ -172,43 +186,71 @@
     return { success: false, data: null, sha: null };
   }
 
-  async function postMessage(type, payload, path, commitMsg) {
-    try {
-      let endpoint = type === "public" ? "/api/public-feed" : "/api/private-messages";
-      const localRes = await fetch(LOCAL_BACKEND + endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (localRes.ok) {
-        const resData = await localRes.json();
-        if (resData.success) return true;
-      }
-    } catch(e) {}
+  async function postMessage(type, payload, path) {
+    await postFirebase(path, payload);
+    return true;
+  }
 
-    if (currentUser.token) {
-      try {
-        const { success, data, sha } = await fetchFile(path);
-        const list = (success && Array.isArray(data)) ? data : [];
-        list.push(payload);
-
-        const jsonStr = JSON.stringify(list, null, 2);
-        const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
-        const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
-        const headers = { 
-          "Content-Type": "application/json",
-          "Authorization": "token " + currentUser.token
+  function toggleVoiceRecord(room) {
+    if (!isRecording) {
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.readAsDataURL(blob);
+          reader.onloadend = () => {
+            const base64Audio = reader.result;
+            const payload = {
+              sender: currentUser.name,
+              text: "🎤 Voice Message 🔊 (Click to play)",
+              audio: base64Audio,
+              time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+            };
+            if (room === "public") postMessage("public", payload, "data/public_feed.json").then(() => fetchPublic());
+            else postMessage("private", payload, getChatFilePath(currentUser.name, activeChatTarget)).then(() => fetchPrivate());
+            speak("Voice message recorded and sent!");
+          };
         };
-
-        const bodyObj = { message: commitMsg, content: b64, branch: GITHUB_BRANCH };
-        if (sha) bodyObj.sha = sha;
-
-        const ghRes = await fetch(url, { method: "PUT", headers, body: JSON.stringify(bodyObj) });
-        if (ghRes.ok || ghRes.status === 201) return true;
-      } catch(e) {}
+        mediaRecorder.start();
+        isRecording = true;
+        speak("Voice recording started. Click Voice button again to stop and send.");
+      }).catch(() => speak("Microphone access denied or unsupported."));
+    } else {
+      if (mediaRecorder) mediaRecorder.stop();
+      isRecording = false;
     }
+  }
 
-    return false;
+  function playAudio(base64Data) {
+    if (!base64Data) return;
+    const audio = new Audio(base64Data);
+    audio.play();
+    speak("Playing voice note.");
+  }
+
+  function saveCurrentChatLocal(chatType, msgs) {
+    const textLines = [
+      "==========================================",
+      `ACCESSIBLE MESSENGER EXPORTED CHAT (${chatType})`,
+      `Exported Date: ${new Date().toLocaleString()}`,
+      "==========================================",
+      ""
+    ];
+
+    msgs.forEach(m => {
+      const rx = m.reaction ? ` [Reaction: ${m.reaction}]` : "";
+      textLines.push(`[${m.time || ''}] ${m.sender || 'User'}: ${m.text || ''}${rx}`);
+    });
+
+    const blob = new Blob([textLines.join("\n")], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${chatType}_${Date.now()}.txt`;
+    a.click();
+    speak("Chat conversation saved locally to your device downloads.");
   }
 
   function onLogin() {
@@ -218,13 +260,6 @@
     if (!u || !p) { alert("Enter username and password"); return; }
 
     currentUser = { name: u, token: t, online: true };
-    
-    fetch(LOCAL_BACKEND + "/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: u, password: p })
-    }).catch(() => {});
-
     showDashboard();
     speak("Connected as " + u + ". Welcome to Accessible Messenger.");
     startPolling();
@@ -242,7 +277,7 @@
   function showDashboard() {
     activeScreen = "dashboard";
     hideAll();
-    document.getElementById("txt-status").innerText = "Logged in as: " + currentUser.name;
+    document.getElementById("txt-status").innerText = "Logged in as: " + currentUser.name + " (v1.2.0)";
     document.getElementById("screen-dashboard").classList.remove("hidden");
   }
 
@@ -257,7 +292,7 @@
   async function fetchPublic() {
     const { success, data } = await fetchFile("data/public_feed.json");
     if (success && data && activeScreen === "public_feed") {
-      // Focus Stability Fix: ONLY append/update DOM when count changes!
+      publicMessages = data;
       if (data.length !== renderedPublicCount) {
         if (data.length > renderedPublicCount && renderedPublicCount > 0) {
           const latest = data[data.length - 1];
@@ -273,9 +308,11 @@
     const box = document.getElementById("public-msg-box");
     box.innerHTML = messages.map(m => {
       const isMe = m.sender === currentUser.name;
-      return `<div class="msg-card ${isMe ? 'me' : ''}" tabindex="0" aria-label="Message from ${m.sender}, ${m.time || ''}: ${m.text}">
+      const rx = m.reaction ? ` [${m.reaction}]` : "";
+      const onclickAttr = m.audio ? `onclick="playAudio('${m.audio}')"` : "";
+      return `<div class="msg-card ${isMe ? 'me' : ''}" tabindex="0" ${onclickAttr} aria-label="Message from ${m.sender}, ${m.time || ''}: ${m.text}${rx}">
         <div class="msg-sender ${isMe ? 'me' : ''}"><span>${m.sender}</span><span>${m.time || ''}</span></div>
-        <div class="msg-text">${m.text}</div>
+        <div class="msg-text">${m.text}${rx}</div>
       </div>`;
     }).join("");
     box.scrollTop = box.scrollHeight;
@@ -283,29 +320,18 @@
 
   async function postPublicMsg() {
     const input = document.getElementById("public-input");
-    const btn = document.getElementById("btn-post-public");
     const txt = input.value.trim();
     if (!txt) return;
 
-    btn.disabled = true;
-    btn.innerText = "Posting...";
     speak("Posting message: " + txt);
-
     const payload = {
       sender: currentUser.name,
       text: txt,
       time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
     };
 
-    const success = await postMessage("public", payload, "data/public_feed.json", "Public msg by " + currentUser.name);
-    
     input.value = "";
-    btn.disabled = false;
-    btn.innerText = "Post";
-
-    if (success) {
-      speak("Message posted successfully.");
-    }
+    await postMessage("public", payload, "data/public_feed.json");
     fetchPublic();
   }
 
@@ -321,9 +347,16 @@
     if (success && data && activeScreen === "private_directory") {
       const box = document.getElementById("user-list-box");
       const now = Math.floor(Date.now() / 1000);
-      box.innerHTML = data.filter(u => u.name !== currentUser.name).map(u => {
-        const isOnline = u.status === "Online" || (now - (u.last_seen || 0)) <= 120;
-        return `<div class="user-list-item" tabindex="0" role="button" aria-label="Chat with ${u.name}, ${isOnline ? 'Online' : 'Offline'}" onclick="openChat('${u.name}')" onkeypress="if(event.key==='Enter') openChat('${u.name}')">● ${u.name} (${isOnline ? 'Online' : 'Offline'})</div>`;
+      
+      // STRICT FILTER: Show ONLY currently active online users (Hide offline users)
+      const onlineUsers = data.filter(u => {
+        if (!u || u.name === currentUser.name) return false;
+        const lastSeen = u.last_seen || 0;
+        return u.status === "Online" || (now - lastSeen) <= 70;
+      });
+
+      box.innerHTML = onlineUsers.map(u => {
+        return `<div class="user-list-item" tabindex="0" role="button" aria-label="Chat with online user ${u.name}" onclick="openChat('${u.name}')" onkeypress="if(event.key==='Enter') openChat('${u.name}')">● ${u.name} (Online)</div>`;
       }).join("");
     }
   }
@@ -335,7 +368,7 @@
     hideAll();
     document.getElementById("chat-header").innerText = "Private: " + name;
     document.getElementById("screen-chat").classList.remove("hidden");
-    speak("Opening chat with " + name);
+    speak("Opening private chat with " + name);
     fetchPrivate();
   }
 
@@ -343,7 +376,7 @@
     const path = getChatFilePath(currentUser.name, activeChatTarget);
     const { success, data } = await fetchFile(path);
     if (success && data && activeScreen === "private_chat") {
-      // Focus Stability Fix: ONLY update DOM when count changes!
+      privateMessages = data;
       if (data.length !== renderedPrivateCount) {
         if (data.length > renderedPrivateCount && renderedPrivateCount > 0) {
           const latest = data[data.length - 1];
@@ -359,9 +392,11 @@
     const box = document.getElementById("private-msg-box");
     box.innerHTML = messages.map(m => {
       const isMe = m.sender === currentUser.name;
-      return `<div class="msg-card ${isMe ? 'me' : ''}" tabindex="0" aria-label="Message from ${isMe ? 'Me' : m.sender}, ${m.time || ''}: ${m.text}">
+      const rx = m.reaction ? ` [${m.reaction}]` : "";
+      const onclickAttr = m.audio ? `onclick="playAudio('${m.audio}')"` : "";
+      return `<div class="msg-card ${isMe ? 'me' : ''}" tabindex="0" ${onclickAttr} aria-label="Message from ${isMe ? 'Me' : m.sender}, ${m.time || ''}: ${m.text}${rx}">
         <div class="msg-sender ${isMe ? 'me' : ''}"><span>${isMe ? 'Me' : m.sender}</span><span>${m.time || ''}</span></div>
-        <div class="msg-text">${m.text}</div>
+        <div class="msg-text">${m.text}${rx}</div>
       </div>`;
     }).join("");
     box.scrollTop = box.scrollHeight;
@@ -369,14 +404,10 @@
 
   async function postPrivateMsg() {
     const input = document.getElementById("private-input");
-    const btn = document.getElementById("btn-send-private");
     const txt = input.value.trim();
     if (!txt || !activeChatTarget) return;
 
-    btn.disabled = true;
-    btn.innerText = "Sending...";
     speak("Sending message: " + txt);
-
     const payload = {
       sender: currentUser.name,
       recipient: activeChatTarget,
@@ -385,15 +416,8 @@
     };
 
     const path = getChatFilePath(currentUser.name, activeChatTarget);
-    const success = await postMessage("private", payload, path, "Private msg to " + activeChatTarget);
-
     input.value = "";
-    btn.disabled = false;
-    btn.innerText = "Send";
-
-    if (success) {
-      speak("Private message sent successfully.");
-    }
+    await postMessage("private", payload, path);
     fetchPrivate();
   }
 
@@ -409,11 +433,7 @@
     }, 2500);
 
     heartbeatTimer = setInterval(async () => {
-      fetch(LOCAL_BACKEND + "/api/heartbeat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: currentUser.name })
-      }).catch(() => {});
+      postFirebase("data/online_users", { name: currentUser.name, last_seen: Math.floor(Date.now() / 1000), status: "Online" });
     }, 30000);
   }
 </script>

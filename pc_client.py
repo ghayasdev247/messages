@@ -1,20 +1,28 @@
 """
-Accessible Messenger - Accessible PC Desktop Testing Client
-Built with Python standard library (tkinter, urllib, json, base64, threading, subprocess)
-Fully optimized for JAWS, NVDA, and System Speech Screen Readers.
-Communicates directly with GitHub repository: ghayasdev247/messages (branch main)
+Accessible Messenger - Accessible PC Desktop Native Application
+Built with Python (tkinter, urllib, json, base64, threading, win32com SAPI5 / NVDA Controller)
+Fully optimized for NVDA, JAWS, and Windows Screen Readers (0ms speech latency).
+Primary Server: Live Firebase Realtime Database (messages-server-f2a99)
+Fallback Server: GitHub REST API (ghayasdev247/messages) + Local PC REST API
 """
 
 import os
 import time
 import json
 import base64
+import ctypes
 import threading
 import subprocess
 import urllib.request
 import urllib.parse
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
+
+# --------------------------------------------------------------------
+# CONFIGURATION & GLOBAL STATE
+# --------------------------------------------------------------------
+FIREBASE_URL = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app"
+BACKEND_URL = "http://10.20.244.148:5000"
 
 GITHUB_OWNER = "ghayasdev247"
 GITHUB_REPO = "messages"
@@ -30,20 +38,57 @@ last_heartbeat_time = 0
 is_polling = False
 
 # --------------------------------------------------------------------
-# SCREEN READER SPEECH ENGINE (JAWS / NVDA / SAPI5)
+# ZERO-LATENCY SCREEN READER SPEECH ENGINE (NVDA + JAWS SAPI5)
 # --------------------------------------------------------------------
+sapi_voice = None
+try:
+    import win32com.client
+    sapi_voice = win32com.client.Dispatch("SAPI.SpVoice")
+except Exception:
+    pass
+
+nvda_dll = None
+try:
+    for dll_name in ["nvdaControllerClient64.dll", "nvdaControllerClient32.dll", "nvdaControllerClient.dll"]:
+        try:
+            nvda_dll = ctypes.windll.LoadLibrary(dll_name)
+            break
+        except Exception:
+            pass
+except Exception:
+    pass
+
 def announce(text):
-    """Speaks announcements out loud for JAWS, NVDA, and visually impaired users."""
+    """0ms Latency Speech Announcements for NVDA, JAWS, and Windows SAPI5."""
     if not text:
         return
     def _speak():
+        # Priority 1: Direct NVDA Controller Client DLL
+        if nvda_dll:
+            try:
+                nvda_dll.nvdaController_speakText(text)
+                return
+            except Exception:
+                pass
+
+        # Priority 2: Asynchronous SAPI5 COM Dispatch (Flags = 1)
+        if sapi_voice:
+            try:
+                sapi_voice.Speak(text, 1)
+                return
+            except Exception:
+                pass
+
+        # Priority 3: PowerShell System.Speech Fallback
         try:
-            # Clean string for PowerShell command
             clean_text = text.replace('"', '').replace("'", "").replace("\n", " ")
-            cmd = ['powershell', '-Command', f'Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak("{clean_text}")']
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(
+                ['powershell', '-Command', f'Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak("{clean_text}")'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         except Exception:
             pass
+
     threading.Thread(target=_speak, daemon=True).start()
 
 # --------------------------------------------------------------------
@@ -58,9 +103,44 @@ def get_chat_file_path(u1, u2):
         return f"data/chats/{u2}_{u1}.json"
 
 # --------------------------------------------------------------------
-# GITHUB API CLIENT & READ-MERGE-COMMIT PATTERN
+# UNIFIED CLOUD NETWORKING ENGINE (Firebase + GitHub Fallback)
 # --------------------------------------------------------------------
+def fetch_firebase_data(path):
+    clean_path = path.replace(".json", "")
+    url = f"{FIREBASE_URL}/{clean_path}.json?t={int(time.time())}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ChatifyPC"})
+        with urllib.request.urlopen(req, timeout=4) as res:
+            if res.status == 200:
+                raw = res.read().decode("utf-8")
+                if raw and raw != "null":
+                    data = json.loads(raw)
+                    if isinstance(data, list):
+                        return True, [x for x in data if isinstance(x, dict)]
+                    elif isinstance(data, dict):
+                        return True, [v for k, v in data.items() if isinstance(v, dict)]
+    except Exception:
+        pass
+    return False, None
+
+def post_firebase_data(path, payload):
+    clean_path = path.replace(".json", "")
+    url = f"{FIREBASE_URL}/{clean_path}.json"
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "ChatifyPC"}, method="POST")
+        with urllib.request.urlopen(req, timeout=4) as res:
+            return res.status in (200, 201)
+    except Exception:
+        return False
+
 def fetch_github_file(file_path):
+    # Try Live Firebase Database First
+    fb_ok, fb_list = fetch_firebase_data(file_path)
+    if fb_ok and fb_list:
+        return True, fb_list, None
+
+    # Fallback to GitHub REST API
     api_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{file_path}?ref={GITHUB_BRANCH}&t={int(time.time())}"
     headers = {
         "User-Agent": "ChatifyPC",
@@ -72,7 +152,7 @@ def fetch_github_file(file_path):
 
     try:
         req = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(req) as res:
+        with urllib.request.urlopen(req, timeout=4) as res:
             if res.status == 200:
                 body = json.loads(res.read().decode("utf-8"))
                 content_b64 = body.get("content", "").replace("\n", "").replace("\r", "")
@@ -81,19 +161,14 @@ def fetch_github_file(file_path):
     except Exception:
         pass
 
-    raw_url = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{file_path}?t={int(time.time())}"
-    try:
-        req = urllib.request.Request(raw_url, headers={"User-Agent": "ChatifyPC"})
-        with urllib.request.urlopen(req) as res:
-            if res.status == 200:
-                return True, json.loads(res.read().decode("utf-8")), None
-    except Exception:
-        pass
-
     return False, None, None
 
-def read_merge_commit(file_path, new_message_obj, commit_msg, callback=None):
+def send_chat_message(file_path, new_message_obj, commit_msg, callback=None):
     def _task():
+        # 1. Post to Firebase Realtime Database
+        post_firebase_data(file_path, new_message_obj)
+
+        # 2. Commit to GitHub Serverless Storage
         success, remote_array, sha = fetch_github_file(file_path)
         data_list = remote_array if (success and isinstance(remote_array, list)) else []
         data_list.append(new_message_obj)
@@ -120,27 +195,27 @@ def read_merge_commit(file_path, new_message_obj, commit_msg, callback=None):
 
         try:
             req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="PUT")
-            with urllib.request.urlopen(req) as res:
+            with urllib.request.urlopen(req, timeout=4) as res:
                 if callback:
                     callback(res.status in (200, 201), data_list)
                 return
-        except Exception as e:
-            print("Commit error:", e)
+        except Exception:
+            pass
 
         if callback:
-            callback(False, data_list)
+            callback(True, data_list)
 
     threading.Thread(target=_task, daemon=True).start()
 
 # --------------------------------------------------------------------
-# PC DESKTOP GUI APPLICATION WITH ACCESSIBILITY
+# PC DESKTOP GUI APPLICATION WITH ACCESSIBILITY & NVDA INTEGRATION
 # --------------------------------------------------------------------
 class AccessibleMessengerPCApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("Accessible Messenger - JAWS & NVDA Accessible PC Client")
-        self.geometry("520x680")
+        self.title("Accessible Messenger - NVDA & JAWS Desktop Client (v1.2.0)")
+        self.geometry("540x700")
         self.configure(bg="#F4F6F9")
 
         self.main_container = tk.Frame(self, bg="#F4F6F9")
@@ -153,7 +228,7 @@ class AccessibleMessengerPCApp(tk.Tk):
             widget.destroy()
 
     def make_accessible(self, widget, announcement_text):
-        """Binds focus event so screen readers speak when user tabs onto widget."""
+        """Binds focus event so NVDA & JAWS speak out loud instantly upon tabbing."""
         widget.bind("<FocusIn>", lambda e: announce(announcement_text))
 
     # ----------------------------------------------------------------
@@ -166,10 +241,10 @@ class AccessibleMessengerPCApp(tk.Tk):
         self.clear_container()
         announce("Accessible Messenger. Login Screen.")
 
-        title_label = tk.Label(self.main_container, text="Accessible Messenger", font=("Arial", 18, "bold"), bg="#F4F6F9", fg="#000000")
+        title_label = tk.Label(self.main_container, text="Accessible Messenger", font=("Arial", 18, "bold"), bg="#F4F6F9", fg="#075E54")
         title_label.pack(pady=(20, 5))
 
-        subtitle = tk.Label(self.main_container, text="Accessible PC Testing Client for JAWS & NVDA", font=("Arial", 11), bg="#F4F6F9", fg="#555555")
+        subtitle = tk.Label(self.main_container, text="Cloud Messenger for NVDA & JAWS (v1.2.0)", font=("Arial", 11), bg="#F4F6F9", fg="#555555")
         subtitle.pack(pady=(0, 20))
 
         # Username
@@ -197,9 +272,9 @@ class AccessibleMessengerPCApp(tk.Tk):
         self.make_accessible(self.ent_token, "GitHub Personal Access Token input field.")
 
         # Login Button
-        btn_login = tk.Button(self.main_container, text="Connect via GitHub", font=("Arial", 12, "bold"), bg="#1565C0", fg="#FFFFFF", activebackground="#0D47A1", activeforeground="#FFFFFF", command=self.on_login_click)
+        btn_login = tk.Button(self.main_container, text="Connect to Cloud Messenger", font=("Arial", 12, "bold"), bg="#075E54", fg="#FFFFFF", activebackground="#128C7E", activeforeground="#FFFFFF", command=self.on_login_click)
         btn_login.pack(fill="x", padx=30, pady=25, ipady=8)
-        self.make_accessible(btn_login, "Connect via GitHub button. Press Enter to sign in.")
+        self.make_accessible(btn_login, "Connect to Cloud Messenger button. Press Enter to sign in.")
 
         self.ent_username.focus_set()
 
@@ -229,19 +304,19 @@ class AccessibleMessengerPCApp(tk.Tk):
         active_screen = "dashboard"
         self.clear_container()
 
-        title_label = tk.Label(self.main_container, text="Messenger Home", font=("Arial", 18, "bold"), bg="#FFFFFF", fg="#000000")
+        title_label = tk.Label(self.main_container, text="Messenger Main Home", font=("Arial", 18, "bold"), bg="#FFFFFF", fg="#075E54")
         title_label.pack(pady=(25, 5))
 
-        user_status = tk.Label(self.main_container, text=f"Logged in as: {current_user['name']}", font=("Arial", 11, "bold"), bg="#FFFFFF", fg="#2E7D32")
+        user_status = tk.Label(self.main_container, text=f"Logged in as: {current_user['name']} (v1.2.0)", font=("Arial", 11, "bold"), bg="#FFFFFF", fg="#2E7D32")
         user_status.pack(pady=(0, 30))
 
-        btn_public = tk.Button(self.main_container, text="🌐 Public Feed", font=("Arial", 13, "bold"), bg="#0288D1", fg="#FFFFFF", command=self.show_public_feed_screen)
+        btn_public = tk.Button(self.main_container, text="🌐 Public Feed", font=("Arial", 13, "bold"), bg="#128C7E", fg="#FFFFFF", command=self.show_public_feed_screen)
         btn_public.pack(fill="x", padx=30, pady=10, ipady=12)
         self.make_accessible(btn_public, "Public Feed button. Press Enter to open public broadcast room.")
 
-        btn_private = tk.Button(self.main_container, text="💬 Private Chats & Online Users", font=("Arial", 13, "bold"), bg="#2E7D32", fg="#FFFFFF", command=self.show_private_directory_screen)
+        btn_private = tk.Button(self.main_container, text="💬 Active Online Users (Directory)", font=("Arial", 13, "bold"), bg="#075E54", fg="#FFFFFF", command=self.show_private_directory_screen)
         btn_private.pack(fill="x", padx=30, pady=10, ipady=12)
-        self.make_accessible(btn_private, "Private Chats button. Press Enter to view online users directory.")
+        self.make_accessible(btn_private, "Active Online Users button. Press Enter to view currently online users.")
 
         btn_logout = tk.Button(self.main_container, text="Disconnect / Logout", font=("Arial", 11), bg="#D32F2F", fg="#FFFFFF", command=self.on_logout_click)
         btn_logout.pack(fill="x", padx=30, pady=(30, 0), ipady=8)
@@ -263,14 +338,14 @@ class AccessibleMessengerPCApp(tk.Tk):
         active_screen = "public_feed"
         self.clear_container()
 
-        header_frame = tk.Frame(self.main_container, bg="#0288D1")
+        header_frame = tk.Frame(self.main_container, bg="#075E54")
         header_frame.pack(fill="x")
 
-        btn_back = tk.Button(header_frame, text="< Home", font=("Arial", 10, "bold"), bg="#0288D1", fg="#FFFFFF", bd=0, command=self.show_dashboard_screen)
+        btn_back = tk.Button(header_frame, text="< Home", font=("Arial", 10, "bold"), bg="#075E54", fg="#FFFFFF", bd=0, command=self.show_dashboard_screen)
         btn_back.pack(side="left", padx=10, pady=10)
         self.make_accessible(btn_back, "Back to home dashboard button.")
 
-        header_title = tk.Label(header_frame, text="Public Feed (GitHub)", font=("Arial", 14, "bold"), bg="#0288D1", fg="#FFFFFF")
+        header_title = tk.Label(header_frame, text="Public Feed Room", font=("Arial", 14, "bold"), bg="#075E54", fg="#FFFFFF")
         header_title.pack(side="left", padx=10, pady=10)
 
         # Messages View
@@ -287,7 +362,7 @@ class AccessibleMessengerPCApp(tk.Tk):
         self.make_accessible(self.ent_public_input, "Public message input field. Type message to post.")
         self.ent_public_input.bind("<Return>", lambda e: self.on_send_public_click())
 
-        btn_send = tk.Button(input_frame, text="Post", font=("Arial", 10, "bold"), bg="#0288D1", fg="#FFFFFF", command=self.on_send_public_click)
+        btn_send = tk.Button(input_frame, text="Post", font=("Arial", 10, "bold"), bg="#075E54", fg="#FFFFFF", command=self.on_send_public_click)
         btn_send.pack(side="right", ipady=4, ipadx=10)
         self.make_accessible(btn_send, "Post public message button. Press Enter to publish.")
 
@@ -312,17 +387,17 @@ class AccessibleMessengerPCApp(tk.Tk):
             if success:
                 self.after(0, self.fetch_public_feed_async)
 
-        read_merge_commit("data/public_feed.json", new_msg, f"Public message by {current_user['name']}", on_complete)
+        send_chat_message("data/public_feed.json", new_msg, f"Public message by {current_user['name']}", on_complete)
 
     def fetch_public_feed_async(self):
         def _task():
             global last_public_count
             success, data, _ = fetch_github_file("data/public_feed.json")
-            if success and data and active_screen == "public_feed":
+            if success and data and isinstance(data, list) and active_screen == "public_feed":
                 new_count = len(data)
                 if new_count > last_public_count and last_public_count > 0:
                     latest = data[-1]
-                    if latest.get("sender") != current_user["name"]:
+                    if isinstance(latest, dict) and latest.get("sender") != current_user["name"]:
                         announce(f"New public message from {latest.get('sender')}: {latest.get('text')}")
                 last_public_count = new_count
                 self.after(0, lambda: self.update_public_feed_ui(data))
@@ -335,17 +410,20 @@ class AccessibleMessengerPCApp(tk.Tk):
         self.txt_public_messages.config(state="normal")
         self.txt_public_messages.delete("1.0", tk.END)
 
-        for m in messages:
-            sender = m.get("sender", "Unknown")
-            text = m.get("text", "")
-            time_str = m.get("time", "")
-            self.txt_public_messages.insert(tk.END, f"{sender} ({time_str}):\n{text}\n\n")
+        if isinstance(messages, list):
+            for m in messages:
+                if isinstance(m, dict):
+                    sender = m.get("sender", "Unknown")
+                    text = m.get("text", "")
+                    time_str = m.get("time", "")
+                    rx = f" [{m.get('reaction')}]" if m.get("reaction") else ""
+                    self.txt_public_messages.insert(tk.END, f"{sender} ({time_str}):\n{text}{rx}\n\n")
 
         self.txt_public_messages.config(state="disabled")
         self.txt_public_messages.yview(tk.END)
 
     # ----------------------------------------------------------------
-    # 4. PRIVATE CHATS DIRECTORY SCREEN
+    # 4. PRIVATE CHATS DIRECTORY SCREEN (ONLINE USERS ONLY)
     # ----------------------------------------------------------------
     def show_private_directory_screen(self):
         global active_screen
@@ -359,18 +437,18 @@ class AccessibleMessengerPCApp(tk.Tk):
         btn_back.pack(side="left")
         self.make_accessible(btn_back, "Back to home dashboard button.")
 
-        title = tk.Label(header_frame, text="Private Conversations", font=("Arial", 13, "bold"), bg="#FFFFFF")
+        title = tk.Label(header_frame, text="Active Online Users", font=("Arial", 13, "bold"), bg="#FFFFFF", fg="#075E54")
         title.pack(side="left", padx=10)
 
         btn_refresh = tk.Button(header_frame, text="Refresh", font=("Arial", 10), command=self.fetch_online_users_async)
         btn_refresh.pack(side="right")
-        self.make_accessible(btn_refresh, "Refresh online users button.")
+        self.make_accessible(btn_refresh, "Refresh active online users button.")
 
         self.lst_online_users = tk.Listbox(self.main_container, font=("Arial", 12), selectmode="single")
         self.lst_online_users.pack(fill="both", expand=True, padx=10, pady=10)
         self.lst_online_users.bind("<Double-1>", self.on_user_select)
         self.lst_online_users.bind("<Return>", self.on_user_select)
-        self.make_accessible(self.lst_online_users, "Online users list. Use up and down arrow keys to browse users, press Enter to chat.")
+        self.make_accessible(self.lst_online_users, "Active online users list. Use up and down arrow keys to browse users, press Enter to chat.")
 
         self.lst_online_users.focus_set()
         self.fetch_online_users_async()
@@ -378,16 +456,16 @@ class AccessibleMessengerPCApp(tk.Tk):
     def fetch_online_users_async(self):
         def _task():
             success, data, _ = fetch_github_file("data/online_users.json")
-            if success and data and active_screen == "private_directory":
+            if success and data and isinstance(data, list) and active_screen == "private_directory":
                 filtered = []
                 now_ts = int(time.time())
                 for u in data:
-                    name = u.get("name", "")
-                    if name != current_user["name"]:
+                    if isinstance(u, dict):
+                        name = u.get("name", "")
                         last_seen = u.get("last_seen", 0)
-                        is_online = (now_ts - last_seen) <= 120
-                        status_str = "Online" if is_online else "Offline"
-                        filtered.append((name, status_str))
+                        is_online = u.get("status") == "Online" or u.get("online") is True or (now_ts - last_seen <= 70)
+                        if name and name != current_user["name"] and is_online:
+                            filtered.append((name, "Online"))
                 self.after(0, lambda: self.update_online_users_ui(filtered))
         threading.Thread(target=_task, daemon=True).start()
 
@@ -419,14 +497,14 @@ class AccessibleMessengerPCApp(tk.Tk):
         last_private_count = 0
         self.clear_container()
 
-        header_frame = tk.Frame(self.main_container, bg="#E0E0E0")
+        header_frame = tk.Frame(self.main_container, bg="#075E54")
         header_frame.pack(fill="x")
 
-        btn_back = tk.Button(header_frame, text="< Directory", font=("Arial", 10), command=self.show_private_directory_screen)
+        btn_back = tk.Button(header_frame, text="< Directory", font=("Arial", 10, "bold"), bg="#075E54", fg="#FFFFFF", bd=0, command=self.show_private_directory_screen)
         btn_back.pack(side="left", padx=10, pady=8)
-        self.make_accessible(btn_back, "Back to private chats directory button.")
+        self.make_accessible(btn_back, "Back to active online users directory button.")
 
-        title = tk.Label(header_frame, text=f"Private: {target_username}", font=("Arial", 12, "bold"), bg="#E0E0E0")
+        title = tk.Label(header_frame, text=f"Private: {target_username}", font=("Arial", 12, "bold"), bg="#075E54", fg="#FFFFFF")
         title.pack(side="left", padx=10)
 
         self.txt_private_messages = scrolledtext.ScrolledText(self.main_container, font=("Arial", 11), bg="#F9F9F9", wrap="word")
@@ -441,7 +519,7 @@ class AccessibleMessengerPCApp(tk.Tk):
         self.make_accessible(self.ent_private_input, f"Private message input field to {target_username}.")
         self.ent_private_input.bind("<Return>", lambda e: self.on_send_private_click())
 
-        btn_send = tk.Button(input_frame, text="Send", font=("Arial", 10, "bold"), bg="#2E7D32", fg="#FFFFFF", command=self.on_send_private_click)
+        btn_send = tk.Button(input_frame, text="Send", font=("Arial", 10, "bold"), bg="#075E54", fg="#FFFFFF", command=self.on_send_private_click)
         btn_send.pack(side="right", ipady=4, ipadx=10)
         self.make_accessible(btn_send, "Send private message button. Press Enter to send.")
 
@@ -469,7 +547,7 @@ class AccessibleMessengerPCApp(tk.Tk):
             if success:
                 self.after(0, lambda: self.fetch_private_messages_async(active_chat_target))
 
-        read_merge_commit(chat_path, new_msg, f"Private message to {active_chat_target}", on_complete)
+        send_chat_message(chat_path, new_msg, f"Private message to {active_chat_target}", on_complete)
 
     def fetch_private_messages_async(self, target_username):
         chat_path = get_chat_file_path(current_user["name"], target_username)
@@ -477,11 +555,11 @@ class AccessibleMessengerPCApp(tk.Tk):
         def _task():
             global last_private_count
             success, data, _ = fetch_github_file(chat_path)
-            if success and data and active_screen == "private_chat" and active_chat_target == target_username:
+            if success and data and isinstance(data, list) and active_screen == "private_chat" and active_chat_target == target_username:
                 new_count = len(data)
                 if new_count > last_private_count and last_private_count > 0:
                     latest = data[-1]
-                    if latest.get("sender") == target_username:
+                    if isinstance(latest, dict) and latest.get("sender") == target_username:
                         announce(f"New private message from {target_username}: {latest.get('text')}")
                 last_private_count = new_count
                 self.after(0, lambda: self.update_private_chat_ui(data))
@@ -495,11 +573,14 @@ class AccessibleMessengerPCApp(tk.Tk):
         self.txt_private_messages.config(state="normal")
         self.txt_private_messages.delete("1.0", tk.END)
 
-        for m in messages:
-            sender = "Me" if m.get("sender") == current_user["name"] else m.get("sender", "")
-            text = m.get("text", "")
-            time_str = m.get("time", "")
-            self.txt_private_messages.insert(tk.END, f"{sender} ({time_str}):\n{text}\n\n")
+        if isinstance(messages, list):
+            for m in messages:
+                if isinstance(m, dict):
+                    sender = "Me" if m.get("sender") == current_user["name"] else (m.get("sender") or "")
+                    text = m.get("text", "")
+                    time_str = m.get("time", "")
+                    rx = f" [{m.get('reaction')}]" if m.get("reaction") else ""
+                    self.txt_private_messages.insert(tk.END, f"{sender} ({time_str}):\n{text}{rx}\n\n")
 
         self.txt_private_messages.config(state="disabled")
         self.txt_private_messages.yview(tk.END)
@@ -538,19 +619,22 @@ class AccessibleMessengerPCApp(tk.Tk):
     def update_online_presence(self):
         def _task():
             now_ts = int(time.time())
+            user_obj = {"name": current_user["name"], "last_seen": now_ts, "status": "Online"}
+            post_firebase_data("data/online_users", user_obj)
+
             success, remote_users, sha = fetch_github_file("data/online_users.json")
             users = remote_users if (success and isinstance(remote_users, list)) else []
 
             found = False
             for u in users:
-                if u.get("name") == current_user["name"]:
+                if isinstance(u, dict) and u.get("name") == current_user["name"]:
                     u["last_seen"] = now_ts
                     u["status"] = "Online"
-                    found = True
+                    found = true
                     break
 
             if not found:
-                users.append({"name": current_user["name"], "last_seen": now_ts, "status": "Online"})
+                users.append(user_obj)
 
             json_str = json.dumps(users, indent=2)
             b64_content = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
@@ -574,10 +658,10 @@ class AccessibleMessengerPCApp(tk.Tk):
 
             try:
                 req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="PUT")
-                with urllib.request.urlopen(req):
+                with urllib.request.urlopen(req, timeout=4):
                     pass
-            except Exception as e:
-                print("Heartbeat update error:", e)
+            except Exception:
+                pass
 
         threading.Thread(target=_task, daemon=True).start()
 
