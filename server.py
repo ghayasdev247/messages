@@ -239,10 +239,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.0.3",
-                "version_code": 4,
+                "version": "1.0.4",
+                "version_code": 5,
                 "download_url": "/api/download-lua",
-                "changelog": "Local Wi-Fi & Remote GitHub Auto-Update Engine v1.0.3."
+                "changelog": "Local Wi-Fi & Remote GitHub Auto-Update Engine v1.0.4."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
