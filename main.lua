@@ -1,8 +1,8 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Features: Public Feed, Private Messaging, Accessibility & Jieshuo Optimized
--- Backend: GitHub Native Serverless (ghayasdev247/messages) & REST API
+-- Features: Public Feed, Deterministic Private Messaging, Accessibility & Jieshuo Optimized
+-- Backend: GitHub REST API Serverless (ghayasdev247/messages, branch main)
 -- ====================================================================
 
 require "import"
@@ -21,22 +21,33 @@ local GITHUB_OWNER = "ghayasdev247"
 local GITHUB_REPO = "messages"
 local GITHUB_BRANCH = "main"
 
--- Fallback local server URL if using local server instead of raw GitHub
-local BACKEND_URL = "http://10.0.2.2:5000"
-local USE_GITHUB_SERVERLESS = true
-
 local currentUser = { name = "", online = false, githubToken = "" }
 local activeScreen = "login" -- "login", "dashboard", "public_feed", "private_directory", "private_chat"
 local activeChatTarget = ""
 local pollingHandler = nil
 local isPolling = false
 
+local lastPublicMessageCount = 0
+local lastPrivateMessageCount = 0
+local lastHeartbeatTime = 0
+
 -- Data Stores
 local publicFeedMessages = {}
 local onlineUsersList = {}
-local privateChatHistory = {} -- Keyed by username
-local lastPublicMessageCount = 0
-local lastPrivateMessageCount = 0
+local privateChatHistory = {} -- Keyed by target username
+
+-- --------------------------------------------------------------------
+-- DETERMINISTIC PATH GENERATOR
+-- --------------------------------------------------------------------
+function getChatFilePath(u1, u2)
+  local u1_lower = string.lower(u1)
+  local u2_lower = string.lower(u2)
+  if u1_lower < u2_lower then
+    return "data/chats/" .. u1 .. "_" .. u2 .. ".json"
+  else
+    return "data/chats/" .. u2 .. "_" .. u1 .. ".json"
+  end
+end
 
 -- --------------------------------------------------------------------
 -- JSON & BASE64 UTILITIES
@@ -72,12 +83,17 @@ function encodeJSON(tbl)
 end
 
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local b64lookup = {}
+for i = 1, #b64chars do
+  b64lookup[b64chars:sub(i, i)] = i - 1
+end
+
 function base64Encode(data)
   return ((data:gsub('.', function(x) 
     local r,b='',x:byte()
     for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
     return r
-  end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+  end)..'0000'):gsub('%d%d%d?%d?%d?', function(x)
     if (#x < 6) then return '' end
     local c=0
     for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
@@ -85,7 +101,21 @@ function base64Encode(data)
   end)..({ '', '==', '=' })[#data%3+1])
 end
 
--- Helper function to make Jieshuo/Screen reader announcements
+function base64Decode(data)
+  data = string.gsub(data, '[^'..b64chars..'=]', '')
+  return (data:gsub('.', function(x)
+    if (x == '=') then return '' end
+    local r,b= '', b64lookup[x] or 0
+    for i=6,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
+    return r
+  end):gsub('%d%d%d%d%d%d%d%d', function(x)
+    local c=0
+    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+    return string.char(c)
+  end))
+end
+
+-- Helper function for Screen Reader Announcements (Jieshuo)
 function announce(text)
   pcall(function()
     Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
@@ -94,59 +124,72 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- GITHUB REST API WRAPPER
+-- GITHUB REST API ENGINE (CDN Cache Bypass & SHA Tracking)
 -- --------------------------------------------------------------------
-function fetchRawGitHubData(filePath, callback)
-  local rawUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
-    GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, filePath, os.time())
+function fetchGitHubFile(filePath, callback)
+  local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s?ref=%s&t=%d", 
+    GITHUB_OWNER, GITHUB_REPO, filePath, GITHUB_BRANCH, os.time())
   
-  Http.get(rawUrl, function(code, content)
-    if code == 200 then
-      local data = decodeJSON(content)
-      callback(true, data)
-    else
-      -- Fallback to local BACKEND_URL if GitHub raw fetch fails
-      Http.get(BACKEND_URL .. "/api/" .. filePath:gsub("data/", ""):gsub(".json", ""), function(c2, cnt2)
-        if c2 == 200 then
-          callback(true, decodeJSON(cnt2))
-        else
-          callback(false, nil)
-        end
-      end)
-    end
-  end)
-end
-
-function commitGitHubData(filePath, contentStr, commitMessage, callback)
-  local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, filePath)
   local headers = {}
   headers["User-Agent"] = "ChatifyApp"
+  headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+  headers["Accept"] = "application/vnd.github.v3+json"
   if currentUser.githubToken and currentUser.githubToken ~= "" then
     headers["Authorization"] = "token " .. currentUser.githubToken
   end
 
-  -- Step 1: Get current file SHA hash
   Http.get(apiUrl, nil, nil, headers, function(code, content)
-    local sha = nil
     if code == 200 then
-      local info = decodeJSON(content)
-      if info and info.sha then sha = info.sha end
+      local res = decodeJSON(content)
+      if res and res.content then
+        local rawJson = base64Decode(res.content:gsub("%s+", ""))
+        local data = decodeJSON(rawJson)
+        callback(true, data, res.sha)
+        return
+      end
     end
     
-    -- Step 2: Push updated contents
+    -- Fallback to Raw GitHub content URL if API limit reached
+    local rawUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
+      GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, filePath, os.time())
+    Http.get(rawUrl, function(c2, cnt2)
+      if c2 == 200 then
+        callback(true, decodeJSON(cnt2), nil)
+      else
+        callback(false, nil, nil)
+      end
+    end)
+  end)
+end
+
+-- Read-Merge-Commit Pattern to Prevent Race Conditions
+function readMergeCommit(filePath, newMessageObj, commitMsg, callback)
+  fetchGitHubFile(filePath, function(success, remoteArray, sha)
+    local list = (success and type(remoteArray) == "table") and remoteArray or {}
+    table.insert(list, newMessageObj)
+    
+    local jsonStr = encodeJSON(list)
+    local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, filePath)
+    local headers = {}
+    headers["User-Agent"] = "ChatifyApp"
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    headers["Accept"] = "application/vnd.github.v3+json"
+    if currentUser.githubToken and currentUser.githubToken ~= "" then
+      headers["Authorization"] = "token " .. currentUser.githubToken
+    end
+
     local payload = {
-      message = commitMessage,
-      content = base64Encode(contentStr),
+      message = commitMsg,
+      content = base64Encode(jsonStr),
       branch = GITHUB_BRANCH
     }
     if sha then payload.sha = sha end
-    
+
     Http.post(apiUrl, encodeJSON(payload), nil, nil, headers, function(pCode, pContent)
       if pCode == 200 or pCode == 201 then
-        callback(true)
+        callback(true, list)
       else
-        -- Fallback to REST backend
-        callback(false)
+        callback(false, list)
       end
     end)
   end)
@@ -173,11 +216,12 @@ local loginLayout = {
   };
   {
     TextView;
-    text = "GitHub-Native Serverless Login";
+    text = "GitHub Serverless Login";
     textSize = "16sp";
     textColor = "#555555";
     layout_gravity = "center";
     layout_marginBottom = "15dp";
+    ContentDescription = "Subtitle: GitHub Serverless Anonymous Login";
   };
   -- Username Input
   {
@@ -186,6 +230,7 @@ local loginLayout = {
     textSize = "16sp";
     textColor = "#222222";
     layout_marginTop = "5dp";
+    ContentDescription = "Step 1: Enter Username label";
   };
   {
     EditText;
@@ -203,6 +248,7 @@ local loginLayout = {
     textSize = "16sp";
     textColor = "#222222";
     layout_marginTop = "10dp";
+    ContentDescription = "Step 2: Enter Password label";
   };
   {
     EditText;
@@ -214,13 +260,14 @@ local loginLayout = {
     padding = "12dp";
     ContentDescription = "Password edit box. Type your password here.";
   };
-  -- Optional GitHub Personal Access Token Field
+  -- GitHub Token Input
   {
     TextView;
     text = "GitHub Token (Optional for write access)";
     textSize = "14sp";
     textColor = "#777777";
     layout_marginTop = "10dp";
+    ContentDescription = "GitHub Token label";
   };
   {
     EditText;
@@ -264,12 +311,12 @@ local dashboardLayout = {
     textColor = "#000000";
     layout_gravity = "center";
     layout_marginBottom = "5dp";
-    ContentDescription = "Messenger Main Home Screen";
+    ContentDescription = "Messenger Main Home Screen Header";
   };
   {
     TextView;
     id = "txtLoggedAs";
-    text = "Status: Connected to ghayasdev247/messages";
+    text = "Status: Connected";
     textSize = "15sp";
     textColor = "#2E7D32";
     layout_gravity = "center";
@@ -288,7 +335,7 @@ local dashboardLayout = {
     backgroundColor = "#0288D1";
     textColor = "#FFFFFF";
     textSize = "18sp";
-    ContentDescription = "Public Feed button. Double tap to view or send public messages on GitHub.";
+    ContentDescription = "Public Feed button. Double tap to view or send public messages.";
   };
   
   -- Private Chats Directory Button
@@ -347,7 +394,7 @@ local publicFeedLayout = {
     };
     {
       TextView;
-      text = "Public Feed (GitHub)";
+      text = "Public Feed";
       textSize = "20sp";
       textColor = "#FFFFFF";
       layout_marginLeft = "15dp";
@@ -379,7 +426,7 @@ local publicFeedLayout = {
       layout_weight = "1";
       textSize = "16sp";
       padding = "12dp";
-      ContentDescription = "Public message text field. Type message to post to GitHub repository.";
+      ContentDescription = "Public message text field. Type message to post publicly.";
     };
     {
       Button;
@@ -514,7 +561,7 @@ local chatLayout = {
 }
 
 -- --------------------------------------------------------------------
--- SCREEN CONTROLLERS & GITHUB NETWORKING
+-- SCREEN CONTROLLERS & NETWORKING
 -- --------------------------------------------------------------------
 
 function showLoginScreen()
@@ -546,7 +593,7 @@ function showDashboardScreen()
   activeScreen = "dashboard"
   activity.setContentView(loadlayout(dashboardLayout))
   
-  txtLoggedAs.setText("Logged in as: " .. currentUser.name .. " (GitHub Managed)")
+  txtLoggedAs.setText("Logged in as: " .. currentUser.name)
   txtLoggedAs.setContentDescription("Logged in as " .. currentUser.name)
   
   btnOpenPublicFeed.onClick = function()
@@ -589,29 +636,29 @@ function showPublicFeedScreen()
       return
     end
     
-    -- Insert new message into local list and sync to GitHub
-    table.insert(publicFeedMessages, {
+    local newMsg = {
       sender = currentUser.name,
       text = text,
       time = os.date("%I:%M %p")
-    })
+    }
     
     editPublicMessageInput.setText("")
-    updatePublicFeedUI()
-    announce("Public message posted: " .. text)
+    announce("Posting public message: " .. text)
     
-    -- Commit updated public_feed.json to GitHub repository
-    local jsonContent = encodeJSON(publicFeedMessages)
-    commitGitHubData("data/public_feed.json", jsonContent, "Post public message by " .. currentUser.name, function(success)
-      if success then
-        fetchPublicFeedMessages()
+    -- Read-Merge-Commit Pattern to prevent race conditions
+    readMergeCommit("data/public_feed.json", newMsg, "Public message by " .. currentUser.name, function(success, mergedList)
+      if success and mergedList then
+        publicFeedMessages = mergedList
+        if activeScreen == "public_feed" then
+          updatePublicFeedUI()
+        end
       end
     end)
   end
 end
 
 function fetchPublicFeedMessages()
-  fetchRawGitHubData("data/public_feed.json", function(success, data)
+  fetchGitHubFile("data/public_feed.json", function(success, data, sha)
     if success and data then
       local newCount = #data
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
@@ -640,6 +687,7 @@ function updatePublicFeedUI()
       id = "msgSender";
       textSize = "12sp";
       textColor = "#0288D1";
+      ContentDescription = "Message Sender Header";
     };
     {
       TextView;
@@ -647,6 +695,7 @@ function updatePublicFeedUI()
       textSize = "16sp";
       textColor = "#111111";
       padding = "4dp";
+      ContentDescription = "Message Text Body";
     };
   }
   
@@ -677,13 +726,13 @@ function showPrivateDirectoryScreen()
   fetchOnlineUsersList()
   
   btnRefreshUsers.onClick = function()
-    announce("Refreshing GitHub online users directory...")
+    announce("Refreshing online users directory...")
     fetchOnlineUsersList()
   end
 end
 
 function fetchOnlineUsersList()
-  fetchRawGitHubData("data/online_users.json", function(success, data)
+  fetchGitHubFile("data/online_users.json", function(success, data, sha)
     if success and data then
       local filtered = {}
       local now_ts = os.time()
@@ -746,7 +795,7 @@ function updatePrivateDirectoryUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER
+-- PRIVATE CHAT ROOM CONTROLLER (Deterministic Pathing)
 -- --------------------------------------------------------------------
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
@@ -766,24 +815,25 @@ function showPrivateChatScreen(targetUsername)
       return
     end
     
-    if not privateChatHistory[targetUsername] then
-      privateChatHistory[targetUsername] = {}
-    end
-    
-    table.insert(privateChatHistory[targetUsername], {
+    local newMsg = {
       sender = currentUser.name,
       recipient = targetUsername,
       text = text,
       time = os.date("%I:%M %p")
-    })
+    }
     
     editMessageInput.setText("")
-    updatePrivateChatUI(targetUsername)
-    announce("Private message sent: " .. text)
+    announce("Sending private message: " .. text)
     
-    -- Sync private chat thread to GitHub
-    local threadFile = "data/chats/" .. currentUser.name .. "_" .. targetUsername .. ".json"
-    commitGitHubData(threadFile, encodeJSON(privateChatHistory[targetUsername]), "Private message to " .. targetUsername, function() end)
+    local chatPath = getChatFilePath(currentUser.name, targetUsername)
+    readMergeCommit(chatPath, newMsg, "Private message to " .. targetUsername, function(success, mergedList)
+      if success and mergedList then
+        privateChatHistory[targetUsername] = mergedList
+        if activeScreen == "private_chat" and activeChatTarget == targetUsername then
+          updatePrivateChatUI(targetUsername)
+        end
+      end
+    end)
   end
   
   btnBackToPrivateList.onClick = function()
@@ -794,8 +844,8 @@ function showPrivateChatScreen(targetUsername)
 end
 
 function fetchPrivateChatThread(targetUsername)
-  local threadFile = "data/chats/" .. currentUser.name .. "_" .. targetUsername .. ".json"
-  fetchRawGitHubData(threadFile, function(success, data)
+  local chatPath = getChatFilePath(currentUser.name, targetUsername)
+  fetchGitHubFile(chatPath, function(success, data, sha)
     if success and data then
       local newCount = #data
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
@@ -849,8 +899,49 @@ function updatePrivateChatUI(targetUsername)
 end
 
 -- --------------------------------------------------------------------
--- BACKGROUND AUTO-POLLING LOOP & PRESENCE HEARTBEAT
+-- BACKGROUND POLLING LOOP (3.5s Pulse & 30s Presence Heartbeat)
 -- --------------------------------------------------------------------
+function updateOnlinePresence()
+  local now_ts = os.time()
+  if now_ts - lastHeartbeatTime < 30 then return end
+  lastHeartbeatTime = now_ts
+
+  fetchGitHubFile("data/online_users.json", function(success, remoteUsers, sha)
+    local users = (success and type(remoteUsers) == "table") and remoteUsers or {}
+    local found = false
+    for i, u in ipairs(users) do
+      if u.name == currentUser.name then
+        u.last_seen = now_ts
+        u.status = "Online"
+        found = true
+        break
+      end
+    end
+    if not found then
+      table.insert(users, { name = currentUser.name, last_seen = now_ts, status = "Online" })
+    end
+
+    local jsonStr = encodeJSON(users)
+    local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/data/online_users.json", GITHUB_OWNER, GITHUB_REPO)
+    local headers = {}
+    headers["User-Agent"] = "ChatifyApp"
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    headers["Accept"] = "application/vnd.github.v3+json"
+    if currentUser.githubToken and currentUser.githubToken ~= "" then
+      headers["Authorization"] = "token " .. currentUser.githubToken
+    end
+
+    local payload = {
+      message = "Heartbeat presence update for " .. currentUser.name,
+      content = base64Encode(jsonStr),
+      branch = GITHUB_BRANCH
+    }
+    if sha then payload.sha = sha end
+
+    Http.post(apiUrl, encodeJSON(payload), nil, nil, headers, function() end)
+  end)
+end
+
 function startPollingLoop()
   if isPolling then return end
   isPolling = true
@@ -858,7 +949,10 @@ function startPollingLoop()
   local function poll()
     if not currentUser.online or not isPolling then return end
     
-    -- Refresh active screen contents from GitHub
+    -- Pulse Heartbeat Presence
+    updateOnlinePresence()
+    
+    -- Pulse Screen Data Refresh
     if activeScreen == "public_feed" then
       fetchPublicFeedMessages()
     elseif activeScreen == "private_directory" then
@@ -867,8 +961,8 @@ function startPollingLoop()
       fetchPrivateChatThread(activeChatTarget)
     end
     
-    -- Schedule next pulse after 4 seconds
-    Handler().postDelayed(Runnable{ run = poll }, 4000)
+    -- Schedule next 3.5s pulse
+    Handler().postDelayed(Runnable{ run = poll }, 3500)
   end
   
   poll()
