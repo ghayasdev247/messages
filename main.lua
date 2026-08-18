@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.6.2 (Build Code: 21)
--- Features: AAC HD Voice Recording, Pure Lua Base64 Audio Engine,
---           Cached Playback, Ephemeral Audio Storage Purge & Cloud Auto-Cleanup
+-- Version: 1.7.0 (Build Code: 23)
+-- Features: Ultra-Fast Chunked Base64 Engine, Scoped-Storage Safe Voice Path,
+--           Bulletproof Recording & Screen Reader Voice Engine
 -- ====================================================================
 
 require "import"
@@ -20,8 +20,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.6.3"
-local APP_VERSION_CODE = 22
+local APP_VERSION = "1.7.0"
+local APP_VERSION_CODE = 23
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -52,6 +52,7 @@ local lastHeartbeatTime = 0
 local mediaRecorder = nil
 local isRecordingVoice = false
 local voiceRecordPath = ""
+local activeVoicePlayer = nil
 
 -- Data Stores (Strictly Ephemeral by Default)
 local publicFeedMessages = {}
@@ -72,7 +73,28 @@ function getChatFilePath(u1, u2)
 end
 
 -- --------------------------------------------------------------------
--- JSON & PURE LUA BASE64 UTILITIES (100% Binary Safe)
+-- STORAGE DIRECTORY RESOLVER (100% Android Scoped Storage Safe)
+-- --------------------------------------------------------------------
+function getAppAudioDir()
+  local dir = "/sdcard/Download/Accessible_Messenger_Voice"
+  pcall(function()
+    if activity and activity.getExternalFilesDir then
+      local ext = activity.getExternalFilesDir("voice_notes")
+      if ext then dir = ext.getAbsolutePath() end
+    elseif activity and activity.getFilesDir then
+      local f = activity.getFilesDir()
+      if f then dir = f.getAbsolutePath() .. "/voice_notes" end
+    end
+  end)
+  pcall(function()
+    local folder = File(dir)
+    if not folder.exists() then folder.mkdirs() end
+  end)
+  return dir
+end
+
+-- --------------------------------------------------------------------
+-- JSON & FAST CHUNKED BASE64 ENGINE (100% Binary Safe & Fast)
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -117,35 +139,72 @@ function encodeJSON(val)
 end
 
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local b64lookup = {}
+for i = 1, 64 do
+  b64lookup[b64chars:sub(i, i)] = i - 1
+end
 
 function base64Encode(data)
   if not data or data == "" then return "" end
-  return ((data:gsub('.', function(x) 
-    local r,b='',x:byte()
-    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-    return r
-  end)..'0000'):gsub('%d%d%d?%d?%d?', function(x)
-    if (#x < 6) then return '' end
-    local c=0
-    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-    return b64chars:sub(c+1,c+1)
-  end)..({ '', '==', '=' })[#data%3+1])
+  local len = #data
+  local out = {}
+  local index = 1
+  for i = 1, len, 3 do
+    local b1 = data:byte(i)
+    local b2 = data:byte(i + 1) or 0
+    local b3 = data:byte(i + 2) or 0
+    
+    local n = b1 * 65536 + b2 * 256 + b3
+    
+    local c1 = math.floor(n / 262144) % 64 + 1
+    local c2 = math.floor(n / 4096) % 64 + 1
+    local c3 = math.floor(n / 64) % 64 + 1
+    local c4 = n % 64 + 1
+    
+    out[index] = b64chars:sub(c1, c1)
+    out[index + 1] = b64chars:sub(c2, c2)
+    out[index + 2] = (i + 1 <= len) and b64chars:sub(c3, c3) or "="
+    out[index + 3] = (i + 2 <= len) and b64chars:sub(c4, c4) or "="
+    index = index + 4
+  end
+  return table.concat(out)
 end
 
 function base64Decode(data)
   if not data or data == "" then return "" end
-  data = string.gsub(data, '[^'..b64chars..'=]', '')
-  return (data:gsub('=', ''):gsub('.', function(x)
-    if (x == '=') then return '' end
-    local r,f='',(b64chars:find(x)-1)
-    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
-    return r
-  end):gsub('%d%d%d?%d?%d?', function(x)
-    if (#x ~= 8) then return '' end
-    local c=0
-    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
-    return string.char(c)
-  end))
+  data = data:gsub("[^A-Za-z0-9+/=]", "")
+  local len = #data
+  if len % 4 ~= 0 then return "" end
+  
+  local out = {}
+  local index = 1
+  for i = 1, len, 4 do
+    local c1 = b64lookup[data:sub(i, i)] or 0
+    local c2 = b64lookup[data:sub(i + 1, i + 1)] or 0
+    local c3_char = data:sub(i + 2, i + 2)
+    local c4_char = data:sub(i + 3, i + 3)
+    
+    local c3 = (c3_char ~= "=") and (b64lookup[c3_char] or 0) or 0
+    local c4 = (c4_char ~= "=") and (b64lookup[c4_char] or 0) or 0
+    
+    local n = c1 * 262144 + c2 * 4096 + c3 * 64 + c4
+    
+    local b1 = math.floor(n / 65536) % 256
+    local b2 = math.floor(n / 256) % 256
+    local b3 = n % 256
+    
+    out[index] = string.char(b1)
+    index = index + 1
+    if c3_char ~= "=" then
+      out[index] = string.char(b2)
+      index = index + 1
+    end
+    if c4_char ~= "=" then
+      out[index] = string.char(b3)
+      index = index + 1
+    end
+  end
+  return table.concat(out)
 end
 
 function encodeAudioFileToBase64(filePath)
@@ -155,7 +214,9 @@ function encodeAudioFileToBase64(filePath)
     if f then
       local data = f:read("*a")
       f:close()
-      b64Result = base64Encode(data)
+      if data and #data > 0 then
+        b64Result = base64Encode(data)
+      end
     end
   end)
   return b64Result
@@ -190,9 +251,7 @@ end
 -- --------------------------------------------------------------------
 function purgeEphemeralAudioFiles()
   pcall(function()
-    import "android.os.Environment"
-    local baseDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
-    local voiceFolder = baseDownload .. "/Accessible_Messenger_Voice"
+    local voiceFolder = getAppAudioDir()
     local folder = File(voiceFolder)
     if folder.exists() and folder.isDirectory() then
       local files = folder.listFiles()
@@ -558,9 +617,6 @@ end
 -- --------------------------------------------------------------------
 -- ANDROID SCREEN-READER ACCESSIBLE VOICE RECORDING & PLAYBACK ENGINE
 -- --------------------------------------------------------------------
-local activeVoicePlayer = nil
-local recordingStartTime = 0
-
 function downloadAndPlayVoiceNote(msgItem)
   import "android.media.MediaPlayer"
   
@@ -572,24 +628,11 @@ function downloadAndPlayVoiceNote(msgItem)
     return
   end
   
-  local voiceFolder = "/sdcard/Download/Accessible_Messenger_Voice"
-  pcall(function()
-    import "android.os.Environment"
-    local baseDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
-    voiceFolder = baseDownload .. "/Accessible_Messenger_Voice"
-  end)
-  
-  pcall(function()
-    local folder = File(voiceFolder)
-    if not folder.exists() then folder.mkdirs() end
-  end)
-  
-  -- Create unique cached audio file path
-  local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", "")
-  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
+  local voiceFolder = getAppAudioDir()
+  local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", ""):gsub(":", "")
+  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".3gp"
   local isFileReady = false
   
-  -- Check if local file exists and is valid
   pcall(function()
     local fObj = File(targetAudioFile)
     if fObj.exists() and fObj.length() > 0 then
@@ -607,7 +650,6 @@ function downloadAndPlayVoiceNote(msgItem)
     end)
   end
   
-  -- Decode from Base64 if not yet cached
   if not isFileReady then
     announce("Downloading voice note...")
     isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
@@ -648,26 +690,26 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
   
   local function startVoiceRecording()
     if isRecordingVoice then return end
-    pcall(function()
-      local downloadDir = "/sdcard/Download"
-      voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".m4a"
+    local ok = pcall(function()
+      local voiceFolder = getAppAudioDir()
+      voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
       
       mediaRecorder = MediaRecorder()
       mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-      mediaRecorder.setAudioSamplingRate(44100)
-      mediaRecorder.setAudioEncodingBitRate(96000)
+      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
       mediaRecorder.setOutputFile(voiceRecordPath)
       mediaRecorder.prepare()
       mediaRecorder.start()
       isRecordingVoice = true
-      recordingStartTime = os.time()
       
       btnWidget.setText("⏹️")
       btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
-      announce("Voice recording started. Speak now, then tap to stop and send.")
+      announce("Recording voice note. Speak now, then tap to stop and send.")
     end)
+    if not ok then
+      announce("Failed to start voice recorder. Please check microphone permissions.")
+    end
   end
   
   local function stopAndSendVoiceRecording()
@@ -706,7 +748,6 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
     end
   end
   
-  -- 1. Tap-to-Record Toggle (Primary for Jieshuo / Screen Readers)
   btnWidget.onClick = function()
     if not isRecordingVoice then
       startVoiceRecording()
@@ -1038,7 +1079,7 @@ local publicFeedLayout = {
       layout_width = "50dp";
       layout_height = "50dp";
       layout_marginLeft = "6dp";
-      ContentDescription = "Hold to record voice note, release to send";
+      ContentDescription = "Record voice note button. Double tap to record.";
     };
   };
 }
@@ -1181,7 +1222,7 @@ local chatLayout = {
       layout_width = "50dp";
       layout_height = "50dp";
       layout_marginLeft = "6dp";
-      ContentDescription = "Hold to record voice note, release to send";
+      ContentDescription = "Record voice note button. Double tap to record.";
     };
   };
 }
@@ -1375,7 +1416,6 @@ function updatePublicFeedUI()
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listPublicMessages.setAdapter(adapter)
   
-  -- SINGLE TAP: Immediate Voice Download & Auto Playback (Checks Cache First)
   listPublicMessages.onItemClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = publicFeedMessages[idx]
@@ -1388,7 +1428,6 @@ function updatePublicFeedUI()
     end
   end
   
-  -- LONG PRESS ONLY: Open Context Options Modal
   listPublicMessages.onItemLongClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = publicFeedMessages[idx]
@@ -1625,7 +1664,6 @@ function updatePrivateChatUI(targetUsername)
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listChatMessages.setAdapter(adapter)
   
-  -- SINGLE TAP: Immediate Voice Download & Auto Playback (Checks Cache First)
   listChatMessages.onItemClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = msgs[idx]
@@ -1638,7 +1676,6 @@ function updatePrivateChatUI(targetUsername)
     end
   end
   
-  -- LONG PRESS ONLY: Open Context Options Modal
   listChatMessages.onItemLongClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = msgs[idx]

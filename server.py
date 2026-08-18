@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.6.3",
-                "version_code": 22,
+                "version": "1.7.0",
+                "version_code": 23,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.6.3: Tap-to-Record & Hold-to-Record Screen Reader Voice Engine with Auto-Protected MediaPlayer Playback."
+                "changelog": "Version 1.7.0: Ultra-Fast Chunked Base64 Engine, Scoped-Storage Safe Voice Path & Bulletproof Recording Engine."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
