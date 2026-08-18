@@ -1,8 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Features: Public Feed, Deterministic Private Messaging, Focus Stability, Card UI Layout
--- Backend: Unified Cross-Device Real-Time Sync & Mobile Downloads Storage Auto-Update
+-- Version: 1.0.5 (Build Code: 6)
+-- Features: Public Feed, Deterministic Private Chats, Card UI, External Download Updates
+-- Networking: Local Wi-Fi REST API with Automatic GitHub Serverless Fallback
 -- ====================================================================
 
 require "import"
@@ -33,7 +34,6 @@ local GITHUB_BRANCH = "main"
 local currentUser = { name = "", online = false, githubToken = "" }
 local activeScreen = "login" -- "login", "dashboard", "public_feed", "private_directory", "private_chat"
 local activeChatTarget = ""
-local pollingHandler = nil
 local isPolling = false
 
 local lastPublicMessageCount = 0
@@ -45,7 +45,7 @@ local lastHeartbeatTime = 0
 -- Data Stores
 local publicFeedMessages = {}
 local onlineUsersList = {}
-local privateChatHistory = {} -- Keyed by target username
+local privateChatHistory = {}
 
 -- --------------------------------------------------------------------
 -- DETERMINISTIC PATH GENERATOR
@@ -61,7 +61,7 @@ function getChatFilePath(u1, u2)
 end
 
 -- --------------------------------------------------------------------
--- JSON UTILITIES
+-- JSON & BASE64 UTILITIES
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -77,23 +77,64 @@ function decodeJSON(str)
   return nil
 end
 
-function encodeJSON(tbl)
+function encodeJSON(val)
   if jsonModule and jsonModule.encode then
-    local ok, res = pcall(jsonModule.encode, tbl)
+    local ok, res = pcall(jsonModule.encode, val)
     if ok then return res end
   end
-  local parts = {}
-  for k, v in pairs(tbl) do
-    if type(v) == "string" then
-      table.insert(parts, string.format("%q:%q", tostring(k), tostring(v)))
-    elseif type(v) == "number" or type(v) == "boolean" then
-      table.insert(parts, string.format("%q:%s", tostring(k), tostring(v)))
+  if type(val) == "table" then
+    local isArray = #val > 0 or next(val) == nil
+    local parts = {}
+    if isArray then
+      for _, item in ipairs(val) do
+        table.insert(parts, encodeJSON(item))
+      end
+      return "[" .. table.concat(parts, ",") .. "]"
+    else
+      for k, v in pairs(val) do
+        table.insert(parts, string.format("%q:%s", tostring(k), encodeJSON(v)))
+      end
+      return "{" .. table.concat(parts, ",") .. "}"
     end
+  elseif type(val) == "string" then
+    return string.format("%q", val)
+  elseif type(val) == "number" or type(val) == "boolean" then
+    return tostring(val)
+  else
+    return "null"
   end
-  return "{" .. table.concat(parts, ",") .. "}"
 end
 
--- Helper function for Screen Reader Announcements (Jieshuo)
+local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+function base64Encode(data)
+  return ((data:gsub('.', function(x) 
+    local r,b='',x:byte()
+    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
+    return r
+  end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+    if (#x < 6) then return '' end
+    local c=0
+    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
+    return b64chars:sub(c+1,c+1)
+  end)..({ '', '==', '=' })[#data%3+1])
+end
+
+function base64Decode(data)
+  data = string.gsub(data, '[^'..b64chars..'=]', '')
+  return (data:gsub('=', ''):gsub('.', function(x)
+    if (x == '=') then return '' end
+    local r,f='',(b64chars:find(x)-1)
+    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+    return r
+  end):gsub('%d%d%d?%d?%d?%d?', function(x)
+    if (#x ~= 8) then return '' end
+    local c=0
+    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+    return string.char(c)
+  end))
+end
+
 function announce(text)
   pcall(function()
     Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
@@ -102,55 +143,105 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- MOBILE DOWNLOADS STORAGE REMOTE UPDATE ENGINE (Saved to /sdcard/Download/)
+-- GITHUB REST API ENGINE
+-- --------------------------------------------------------------------
+function fetchGitHubFile(filePath, callback)
+  local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s?ref=%s&t=%d",
+    GITHUB_OWNER, GITHUB_REPO, filePath, GITHUB_BRANCH, os.time())
+  
+  local headers = {}
+  headers["User-Agent"] = "Chatify-Accessible-Client"
+  headers["Accept"] = "application/vnd.github.v3+json"
+  headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+  if currentUser.githubToken and currentUser.githubToken ~= "" then
+    headers["Authorization"] = "token " .. currentUser.githubToken
+  end
+
+  Http.get(apiUrl, nil, nil, headers, function(code, content)
+    if code == 200 then
+      local resp = decodeJSON(content)
+      if resp and resp.content then
+        local rawData = base64Decode(resp.content:gsub("\n", ""))
+        callback(true, decodeJSON(rawData), resp.sha)
+      else
+        callback(false, nil, nil)
+      end
+    elseif code == 404 then
+      callback(true, nil, nil)
+    else
+      callback(false, nil, nil)
+    end
+  end)
+end
+
+function commitGitHubFile(filePath, newTableData, commitMessage, callback)
+  local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, filePath)
+  local headers = {}
+  headers["User-Agent"] = "Chatify-Accessible-Client"
+  headers["Accept"] = "application/vnd.github.v3+json"
+  headers["Content-Type"] = "application/json"
+  if currentUser.githubToken and currentUser.githubToken ~= "" then
+    headers["Authorization"] = "token " .. currentUser.githubToken
+  end
+
+  fetchGitHubFile(filePath, function(ok, currentData, sha)
+    local payload = {
+      message = commitMessage,
+      content = base64Encode(encodeJSON(newTableData)),
+      branch = GITHUB_BRANCH
+    }
+    if sha then payload.sha = sha end
+
+    Http.post(apiUrl, encodeJSON(payload), nil, nil, headers, function(pCode, pContent)
+      if pCode == 200 or pCode == 201 then
+        if callback then callback(true) end
+      else
+        if callback then callback(false) end
+      end
+    end)
+  end)
+end
+
+-- --------------------------------------------------------------------
+-- STORAGE & REMOTE UPDATE ENGINE (Saved to /sdcard/Download/)
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
-    announce("Checking GitHub for updates...")
+    announce("Checking for updates...")
   end
   
-  -- Priority 1: Check Local Wi-Fi Network Update API
   Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
     if lCode == 200 then
       local manifest = decodeJSON(lContent)
-      if manifest and manifest.version_code then
-        local remoteCode = tonumber(manifest.version_code) or 1
-        if remoteCode > APP_VERSION_CODE then
-          local versionStr = manifest.version or tostring(remoteCode)
-          announce("Downloading update Version " .. versionStr .. " from Local Server...")
-          
-          Http.get(BACKEND_URL .. "/api/download-lua", function(uCode, uContent)
-            if uCode == 200 and uContent and uContent ~= "" then
-              saveUpdateFile(versionStr, uContent)
-              return
-            end
-          end)
-          return
-        end
+      if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
+        local versionStr = manifest.version or tostring(manifest.version_code)
+        announce("Downloading update Version " .. versionStr .. " from Local Server...")
+        Http.get(BACKEND_URL .. "/api/download-lua", function(uCode, uContent)
+          if uCode == 200 and uContent and uContent ~= "" then
+            saveUpdateFile(versionStr, uContent)
+            return
+          end
+        end)
+        return
       end
     end
     
-    -- Priority 2: Check GitHub Remote Update API
     local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
     Http.get(checkUrl, function(code, content)
       if code == 200 then
         local manifest = decodeJSON(content)
-        if manifest and manifest.version_code then
-          local remoteCode = tonumber(manifest.version_code) or 1
-          if remoteCode > APP_VERSION_CODE then
-            local versionStr = manifest.version or tostring(remoteCode)
-            announce("Downloading update Version " .. versionStr .. " from GitHub...")
-            
-            local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
-            Http.get(updateUrl, function(uCode, uContent)
-              if uCode == 200 and uContent and uContent ~= "" then
-                saveUpdateFile(versionStr, uContent)
-              else
-                announce("Failed to download update script from GitHub.")
-              end
-            end)
-            return
-          end
+        if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
+          local versionStr = manifest.version or tostring(manifest.version_code)
+          announce("Downloading update Version " .. versionStr .. " from GitHub...")
+          local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
+          Http.get(updateUrl, function(uCode, uContent)
+            if uCode == 200 and uContent and uContent ~= "" then
+              saveUpdateFile(versionStr, uContent)
+            else
+              announce("Failed to download update script from GitHub.")
+            end
+          end)
+          return
         end
       end
       
@@ -181,7 +272,6 @@ function saveUpdateFile(versionStr, uContent)
     end
   end)
   
-  -- Fallback to app internal storage if SD Card Download folder access is restricted
   if not savedSuccess then
     savePath = activity.getFilesDir().getAbsolutePath() .. "/" .. fileName
     pcall(function()
@@ -193,30 +283,24 @@ function saveUpdateFile(versionStr, uContent)
     end)
   end
   
-  announce("The update is successful. Re-import the plugin to continue. Saved to Download folder: " .. fileName)
+  announce("Update v" .. versionStr .. " saved to Download folder: " .. fileName .. ". Re-import plugin to apply.")
 end
 
 -- --------------------------------------------------------------------
--- UNIFIED NETWORKING ENGINE
+-- UNIFIED NETWORKING ENGINE (Local API + GitHub Fallback)
 -- --------------------------------------------------------------------
 function apiGet(endpoint, githubFilePath, callback)
   Http.get(BACKEND_URL .. endpoint, function(code, content)
     if code == 200 then
       local res = decodeJSON(content)
-      if res and res.success then
-        callback(true, res.messages or res.users)
+      if res and (res.success or res.messages or res.users) then
+        callback(true, res.messages or res.users or res)
         return
       end
     end
     
-    local apiUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
-      GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, githubFilePath, os.time())
-    Http.get(apiUrl, function(c2, cnt2)
-      if c2 == 200 then
-        callback(true, decodeJSON(cnt2))
-      else
-        callback(false, nil)
-      end
+    fetchGitHubFile(githubFilePath, function(success, data)
+      callback(success, data)
     end)
   end)
 end
@@ -225,9 +309,61 @@ function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
   Http.post(BACKEND_URL .. endpoint, payloadStr, function(code, content)
     if code == 200 or code == 201 then
-      callback(true)
+      if callback then callback(true) end
     else
-      callback(false)
+      -- GITHUB SERVERLESS FALLBACK FOR OFFLINE / REMOTE CONNECTIONS
+      if string.find(endpoint, "/api/public%-feed") then
+        local msgObj = {
+          sender = payload.sender or currentUser.name,
+          text = payload.text,
+          time = payload.time or os.date("%I:%M %p")
+        }
+        fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
+          local feedToSave = currentFeed or {}
+          table.insert(feedToSave, msgObj)
+          commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
+        end)
+
+      elseif string.find(endpoint, "/api/private%-messages") then
+        local msgObj = {
+          sender = payload.sender or currentUser.name,
+          recipient = payload.recipient,
+          text = payload.text,
+          time = payload.time or os.date("%I:%M %p")
+        }
+        local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
+        fetchGitHubFile(filePath, function(ok, currentThread)
+          local threadToSave = currentThread or {}
+          table.insert(threadToSave, msgObj)
+          commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
+        end)
+
+      elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
+        local username = payload.username or currentUser.name
+        if username and username ~= "" then
+          fetchGitHubFile("data/online_users.json", function(ok, userList)
+            local list = userList or {}
+            local found = false
+            local now_ts = os.time()
+            for _, u in ipairs(list) do
+              if u.name == username then
+                u.last_seen = now_ts
+                u.status = "Online"
+                found = true
+                break
+              end
+            end
+            if not found then
+              table.insert(list, { name = username, last_seen = now_ts, status = "Online" })
+            end
+            commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
+          end)
+        else
+          if callback then callback(false) end
+        end
+      else
+        if callback then callback(false) end
+      end
     end
   end)
 end
@@ -260,7 +396,6 @@ local loginLayout = {
     layout_marginBottom = "20dp";
     ContentDescription = "Subtitle: Anonymous Login version " .. APP_VERSION;
   };
-  -- Username Input
   {
     TextView;
     text = "Step 1: Enter Username";
@@ -279,7 +414,6 @@ local loginLayout = {
     backgroundColor = "#FFFFFF";
     ContentDescription = "Username edit box. Type your desired alias here.";
   };
-  -- Password Input
   {
     TextView;
     text = "Step 2: Enter Password";
@@ -299,7 +433,6 @@ local loginLayout = {
     backgroundColor = "#FFFFFF";
     ContentDescription = "Password edit box. Type your password here.";
   };
-  -- Login Button
   {
     Button;
     id = "btnLogin";
@@ -312,7 +445,6 @@ local loginLayout = {
     textSize = "18sp";
     ContentDescription = "Connect to Messenger button. Double tap to sign in.";
   };
-  -- Check for Remote Updates Button
   {
     Button;
     id = "btnCheckUpdate";
@@ -357,8 +489,6 @@ local dashboardLayout = {
     layout_marginBottom = "25dp";
     ContentDescription = "Status indicator: Connected.";
   };
-  
-  -- Public Feed Button
   {
     Button;
     id = "btnOpenPublicFeed";
@@ -371,8 +501,6 @@ local dashboardLayout = {
     textSize = "18sp";
     ContentDescription = "Public Feed button. Double tap to view or send public messages.";
   };
-  
-  -- Private Chats Directory Button
   {
     Button;
     id = "btnOpenPrivateChats";
@@ -385,8 +513,6 @@ local dashboardLayout = {
     textSize = "18sp";
     ContentDescription = "Private Chats button. Double tap to view online users and chat privately.";
   };
-  
-  -- Check Updates Button on Home
   {
     Button;
     id = "btnCheckUpdateHome";
@@ -399,8 +525,6 @@ local dashboardLayout = {
     textSize = "15sp";
     ContentDescription = "Check for Updates button. Double tap to check for updates.";
   };
-
-  -- Logout Button
   {
     Button;
     id = "btnLogout";
@@ -424,7 +548,6 @@ local publicFeedLayout = {
   layout_height = "fill";
   padding = "12dp";
   backgroundColor = "#EBF2F7";
-  -- Header Bar
   {
     LinearLayout;
     orientation = "horizontal";
@@ -450,7 +573,6 @@ local publicFeedLayout = {
       ContentDescription = "Public Feed room.";
     };
   };
-  -- Messages List
   {
     ListView;
     id = "listPublicMessages";
@@ -463,7 +585,6 @@ local publicFeedLayout = {
     stackFromBottom = true;
     transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
   };
-  -- Public Input Bar
   {
     LinearLayout;
     orientation = "horizontal";
@@ -492,7 +613,7 @@ local publicFeedLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 4. PRIVATE CHATS / USER DIRECTORY LAYOUT
+-- 4. PRIVATE CHATS DIRECTORY LAYOUT
 -- --------------------------------------------------------------------
 local privateDirectoryLayout = {
   LinearLayout;
@@ -548,7 +669,6 @@ local chatLayout = {
   layout_height = "fill";
   padding = "12dp";
   backgroundColor = "#EBF2F7";
-  -- Header
   {
     LinearLayout;
     orientation = "horizontal";
@@ -575,7 +695,6 @@ local chatLayout = {
       ContentDescription = "Currently chatting in private room.";
     };
   };
-  -- Message History List
   {
     ListView;
     id = "listChatMessages";
@@ -588,7 +707,6 @@ local chatLayout = {
     stackFromBottom = true;
     transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
   };
-  -- Input Bar
   {
     LinearLayout;
     orientation = "horizontal";
@@ -638,7 +756,7 @@ function showLoginScreen()
       return
     end
     
-    announce("Connecting to server...")
+    announce("Connecting to messenger...")
     
     apiPost("/api/login", { username = name, password = pass }, function(success)
       currentUser.name = name
@@ -774,7 +892,7 @@ function updatePublicFeedUI()
   }
   
   local data = {}
-  for i, m in ipairs(publicFeedMessages) do
+  for _, m in ipairs(publicFeedMessages) do
     table.insert(data, {
       msgSender = m.sender,
       msgTime = m.time or "",
@@ -810,7 +928,7 @@ function fetchOnlineUsersList()
   apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
     if success and data then
       local filtered = {}
-      for i, u in ipairs(data) do
+      for _, u in ipairs(data) do
         local name = u.name or u.username
         if name and name ~= currentUser.name then
           local statusText = u.status or (u.online and "Online" or "Offline")
@@ -851,7 +969,7 @@ function updatePrivateDirectoryUI()
   }
   
   local data = {}
-  for i, u in ipairs(onlineUsersList) do
+  for _, u in ipairs(onlineUsersList) do
     table.insert(data, { 
       itemName = u.name, 
       itemStatus = "● " .. u.status 
@@ -973,7 +1091,7 @@ function updatePrivateChatUI(targetUsername)
   
   local data = {}
   local msgs = privateChatHistory[targetUsername] or {}
-  for i, m in ipairs(msgs) do
+  for _, m in ipairs(msgs) do
     local senderLabel = (m.sender == currentUser.name) and "Me" or m.sender
     table.insert(data, {
       msgSender = senderLabel,
