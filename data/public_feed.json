@@ -13,5 +13,15 @@
     "sender": "ghayas",
     "text": "hi",
     "time": "11:01 PM"
+  },
+  {
+    "sender": "AndroidUser",
+    "text": "Hello from Android phone!",
+    "time": "11:05 PM"
+  },
+  {
+    "sender": "WindowsUser",
+    "text": "Hello back from Windows PC!",
+    "time": "11:05 PM"
   }
 ]
