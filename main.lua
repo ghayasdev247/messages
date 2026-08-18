@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.0.8 (Build Code: 9)
--- Features: Public Feed, Deterministic Private Chats, Card UI, Mobile Downloads Updates
--- Networking: Local Wi-Fi REST API with Automatic GitHub Serverless Fallback
+-- Version: 1.0.9 (Build Code: 10)
+-- Features: Firebase Realtime Database + GitHub Serverless + Local PC REST API
+-- Networking: Triple Redundant Cloud Sync (Firebase RTDB, GitHub API, Local Server)
 -- ====================================================================
 
 require "import"
@@ -18,12 +18,15 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.8"
-local APP_VERSION_CODE = 9
+local APP_VERSION = "1.0.9"
+local APP_VERSION_CODE = 10
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
 local XPK_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk"
+
+-- Firebase Realtime Database Endpoint
+local FIREBASE_URL = "https://chatify-accessible-default-rtdb.firebaseio.com"
 
 -- Active PC Wi-Fi Server IP
 local BACKEND_URL = "http://10.20.244.148:5000"
@@ -288,9 +291,10 @@ function saveUpdateFile(versionStr, uContent)
 end
 
 -- --------------------------------------------------------------------
--- UNIFIED NETWORKING ENGINE (Local API + GitHub Fallback)
+-- TRIPLE REDUNDANT NETWORKING ENGINE (Local API + Firebase RTDB + GitHub)
 -- --------------------------------------------------------------------
 function apiGet(endpoint, githubFilePath, callback)
+  -- Priority 1: Local PC Server
   Http.get(BACKEND_URL .. endpoint, function(code, content)
     if code == 200 then
       local res = decodeJSON(content)
@@ -300,80 +304,112 @@ function apiGet(endpoint, githubFilePath, callback)
       end
     end
     
-    fetchGitHubFile(githubFilePath, function(success, data)
-      callback(success, data)
+    -- Priority 2: Firebase Realtime Database REST API
+    local fbPath = githubFilePath:gsub("%.json$", "")
+    local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
+    Http.get(fbUrl, function(fCode, fContent)
+      if fCode == 200 and fContent and fContent ~= "null" then
+        local fbData = decodeJSON(fContent)
+        if fbData then
+          local list = {}
+          if fbData[1] ~= nil then
+            list = fbData
+          else
+            for _, v in pairs(fbData) do
+              table.insert(list, v)
+            end
+          end
+          callback(true, list)
+          return
+        end
+      end
+      
+      -- Priority 3: GitHub REST API Fallback
+      fetchGitHubFile(githubFilePath, function(success, data)
+        callback(success, data)
+      end)
     end)
   end)
 end
 
 function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
-  local headers = {}
-  headers["Content-Type"] = "application/json"
+  local headers = { ["Content-Type"] = "application/json" }
 
+  -- Priority 1: Local PC Server
   Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function(code, content)
     if code == 200 or code == 201 then
       if callback then callback(true) end
     else
-      Http.post(BACKEND_URL .. endpoint, payloadStr, function(c2, cnt2)
-        if c2 == 200 or c2 == 201 then
-          if callback then callback(true) end
-        else
-          -- GITHUB SERVERLESS FALLBACK FOR OFFLINE / REMOTE CONNECTIONS
-          if string.find(endpoint, "/api/public%-feed") then
-            local msgObj = {
-              sender = payload.sender or currentUser.name,
-              text = payload.text,
-              time = payload.time or os.date("%I:%M %p")
-            }
-            fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
-              local feedToSave = currentFeed or {}
-              table.insert(feedToSave, msgObj)
-              commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
-            end)
+      -- Priority 2 & 3: Dual Sync to Firebase Realtime Database + GitHub Serverless
+      if string.find(endpoint, "/api/public%-feed") then
+        local msgObj = {
+          sender = payload.sender or currentUser.name,
+          text = payload.text,
+          time = payload.time or os.date("%I:%M %p")
+        }
+        -- Post to Firebase Realtime Database
+        Http.post(FIREBASE_URL .. "/data/public_feed.json", encodeJSON(msgObj), function() end)
+        
+        -- Commit to GitHub
+        fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
+          local feedToSave = currentFeed or {}
+          table.insert(feedToSave, msgObj)
+          commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
+        end)
 
-          elseif string.find(endpoint, "/api/private%-messages") then
-            local msgObj = {
-              sender = payload.sender or currentUser.name,
-              recipient = payload.recipient,
-              text = payload.text,
-              time = payload.time or os.date("%I:%M %p")
-            }
-            local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-            fetchGitHubFile(filePath, function(ok, currentThread)
-              local threadToSave = currentThread or {}
-              table.insert(threadToSave, msgObj)
-              commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
-            end)
+      elseif string.find(endpoint, "/api/private%-messages") then
+        local msgObj = {
+          sender = payload.sender or currentUser.name,
+          recipient = payload.recipient,
+          text = payload.text,
+          time = payload.time or os.date("%I:%M %p")
+        }
+        local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
+        local fbPath = filePath:gsub("%.json$", "")
+        
+        -- Post to Firebase Realtime Database
+        Http.post(FIREBASE_URL .. "/" .. fbPath .. ".json", encodeJSON(msgObj), function() end)
+        
+        -- Commit to GitHub
+        fetchGitHubFile(filePath, function(ok, currentThread)
+          local threadToSave = currentThread or {}
+          table.insert(threadToSave, msgObj)
+          commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
+        end)
 
-          elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
-            local username = payload.username or currentUser.name
-            if username and username ~= "" then
-              fetchGitHubFile("data/online_users.json", function(ok, userList)
-                local list = userList or {}
-                local found = false
-                local now_ts = os.time()
-                for _, u in ipairs(list) do
-                  if u.name == username then
-                    u.last_seen = now_ts
-                    u.status = "Online"
-                    found = true
-                    break
-                  end
-                end
-                if not found then
-                  table.insert(list, { name = username, last_seen = now_ts, status = "Online" })
-                end
-                commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
-              end)
-            else
-              if callback then callback(false) end
+      elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
+        local username = payload.username or currentUser.name
+        if username and username ~= "" then
+          local now_ts = os.time()
+          local userObj = { name = username, last_seen = now_ts, status = "Online" }
+          
+          -- Put to Firebase Realtime Database
+          Http.put(FIREBASE_URL .. "/data/online_users/" .. username .. ".json", encodeJSON(userObj), function() end)
+          
+          -- Commit to GitHub
+          fetchGitHubFile("data/online_users.json", function(ok, userList)
+            local list = userList or {}
+            local found = false
+            for _, u in ipairs(list) do
+              if u.name == username then
+                u.last_seen = now_ts
+                u.status = "Online"
+                found = true
+                break
+              end
             end
-          else
-            if callback then callback(false) end
-          end
+            if not found then
+              table.insert(list, userObj)
+            end
+            commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
+          end)
+        else
+          if callback then callback(false) end
         end
-      end)
+      else
+        if callback then callback(false) end
+      end
     end
   end)
 end

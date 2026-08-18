@@ -245,10 +245,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.0.8",
-                "version_code": 9,
+                "version": "1.0.9",
+                "version_code": 10,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.0.8: Removed textStyle and layout_margin attributes in LuaAdapter for Jieshuo Max."
+                "changelog": "Version 1.0.9: Integrated Firebase Realtime Database with GitHub and Local PC backend."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
