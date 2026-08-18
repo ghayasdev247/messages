@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.1.3",
-                "version_code": 14,
+                "version": "1.2.0",
+                "version_code": 15,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.1.3: Direct plugin overwrite support and Version 1.1.3 manifest."
+                "changelog": "Version 1.2.0: Added Voice Notes, Emoji Reactions, Replying, Pinning, Online-Only User Filtering, and Local Chat Exporter."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

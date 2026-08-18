@@ -1,10 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.1.3 (Build Code: 14)
--- Features: Modern WhatsApp & Facebook Messenger Card UI
--- Primary Cloud Engine: Live Firebase Realtime Database (messages-server-f2a99)
--- Failover Cloud Engine: GitHub REST API (ghayasdev247/messages) + Local PC API
+-- Version: 1.2.0 (Build Code: 15)
+-- Features: Voice Notes, Emoji Reactions, Replying, Pinning, Local Chat Exporter
+-- Networking: Firebase Realtime Database + GitHub Serverless + Local PC Server
 -- ====================================================================
 
 require "import"
@@ -19,8 +18,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.1.3"
-local APP_VERSION_CODE = 14
+local APP_VERSION = "1.2.0"
+local APP_VERSION_CODE = 15
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -46,6 +45,11 @@ local lastPrivateMessageCount = 0
 local lastRenderedPublicCount = -1
 local lastRenderedPrivateCount = -1
 local lastHeartbeatTime = 0
+
+-- Audio Recording Global State
+local mediaRecorder = nil
+local isRecordingVoice = false
+local voiceRecordPath = ""
 
 -- Data Stores
 local publicFeedMessages = {}
@@ -145,6 +149,64 @@ function announce(text)
     Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
     activity.getWindow().getDecorView().announceForAccessibility(text)
   end)
+end
+
+-- --------------------------------------------------------------------
+-- LOCAL CHAT EXPORTER (Save to Mobile Downloads Folder)
+-- --------------------------------------------------------------------
+function saveChatLocally(chatType, targetName, messagesList)
+  local downloadDir = "/sdcard/Download/Accessible_Messenger_Chats"
+  pcall(function()
+    import "android.os.Environment"
+    local baseDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
+    downloadDir = baseDownload .. "/Accessible_Messenger_Chats"
+  end)
+  
+  pcall(function()
+    local File = luajava.bindClass("java.io.File")
+    local folder = File(downloadDir)
+    if not folder.exists() then folder.mkdirs() end
+  end)
+  
+  local cleanTarget = (targetName ~= "") and targetName or "PublicFeed"
+  local fileName = chatType .. "_" .. cleanTarget .. "_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
+  local filePath = downloadDir .. "/" .. fileName
+  
+  local contentLines = {}
+  table.insert(contentLines, "==========================================")
+  table.insert(contentLines, "ACCESSIBLE MESSENGER EXPORTED CONVERSATION")
+  table.insert(contentLines, "Chat Room: " .. cleanTarget)
+  table.insert(contentLines, "Exported Date: " .. os.date("%Y-%m-%d %H:%M:%S"))
+  table.insert(contentLines, "==========================================")
+  table.insert(contentLines, "")
+  
+  if type(messagesList) == "table" then
+    for _, m in ipairs(messagesList) do
+      if type(m) == "table" then
+        local sender = m.sender or "Anonymous"
+        local timeStr = m.time or ""
+        local text = m.text or ""
+        local rx = (m.reaction and m.reaction ~= "") and (" [Reaction: " .. m.reaction .. "]") or ""
+        table.insert(contentLines, string.format("[%s] %s: %s%s", timeStr, sender, text, rx))
+      end
+    end
+  end
+  
+  local saved = false
+  pcall(function()
+    local f = io.open(filePath, "w")
+    if f then
+      f:write(table.concat(contentLines, "\n"))
+      f:close()
+      saved = true
+    end
+  end)
+  
+  if saved then
+    announce("Chat saved locally to Downloads: Accessible_Messenger_Chats/" .. fileName)
+  else
+    announce("Failed to save chat locally.")
+  end
 end
 
 -- --------------------------------------------------------------------
@@ -275,7 +337,6 @@ function saveUpdateFile(versionStr, uContent)
     end
   end)
   
-  -- Also attempt to overwrite plugin main.lua directly in Jieshuo tool directories
   local jieshuoPaths = {
     "/sdcard/JieShuo/tools/Chatify Accessible Messenger for the Blind/main.lua",
     "/sdcard/JieShuo/tools/Accessible Messenger/main.lua",
@@ -453,6 +514,132 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
+-- VOICE NOTE ENGINE (RECORDING & PLAYBACK)
+-- --------------------------------------------------------------------
+function toggleVoiceRecording(isPublic, targetName)
+  import "android.media.MediaRecorder"
+  
+  if not isRecordingVoice then
+    pcall(function()
+      local downloadDir = "/sdcard/Download"
+      voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".3gp"
+      mediaRecorder = MediaRecorder()
+      mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+      mediaRecorder.setOutputFile(voiceRecordPath)
+      mediaRecorder.prepare()
+      mediaRecorder.start()
+      isRecordingVoice = true
+      announce("Voice recording started. Tap button again to stop and send.")
+    end)
+  else
+    pcall(function()
+      if mediaRecorder then
+        mediaRecorder.stop()
+        mediaRecorder.release()
+        mediaRecorder = nil
+      end
+      isRecordingVoice = false
+      
+      local msgText = "🎤 Voice Message 🔊 (Double tap options to play)"
+      local payload = {
+        sender = currentUser.name,
+        recipient = targetName,
+        text = msgText,
+        isVoice = true,
+        voicePath = voiceRecordPath
+      }
+      
+      if isPublic then
+        apiPost("/api/public-feed", payload, function() fetchPublicFeedMessages() end)
+      else
+        apiPost("/api/private-messages", payload, function() fetchPrivateChatThread(targetName) end)
+      end
+      announce("Voice message sent!")
+    end)
+  end
+end
+
+function playVoiceNote(filePath)
+  import "android.media.MediaPlayer"
+  pcall(function()
+    local mp = MediaPlayer()
+    mp.setDataSource(filePath)
+    mp.prepare()
+    mp.start()
+    announce("Playing voice note...")
+  end)
+end
+
+-- --------------------------------------------------------------------
+-- MESSAGE OPTIONS MODAL (REACT, REPLY, PIN, DELETE)
+-- --------------------------------------------------------------------
+function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
+  local options = { "❤️ React with Emoji", "↩️ Reply to Message", "📌 Pin Message", "🗑️ Delete Message" }
+  if msgItem.isVoice and msgItem.voicePath then
+    table.insert(options, 1, "▶️ Play Voice Note")
+  end
+
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Message Options")
+  builder.setItems(options, function(dialog, which)
+    local selectedOption = options[which + 1]
+    
+    if string.find(selectedOption, "Play Voice Note") then
+      playVoiceNote(msgItem.voicePath)
+    elseif string.find(selectedOption, "React") then
+      showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
+    elseif string.find(selectedOption, "Reply") then
+      local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", msgItem.text or "")
+      if isPublic then
+        editPublicMessageInput.setText(replyPrefix)
+        editPublicMessageInput.setSelection(#replyPrefix)
+      else
+        editMessageInput.setText(replyPrefix)
+        editMessageInput.setSelection(#replyPrefix)
+      end
+      announce("Replying to message from " .. (msgItem.sender or "User"))
+    elseif string.find(selectedOption, "Pin") then
+      local pinnedText = string.format("📌 Pinned [%s]: %s", msgItem.sender or "User", msgItem.text or "")
+      announce("Pinned message: " .. (msgItem.text or ""))
+      Toast.makeText(activity, pinnedText, Toast.LENGTH_LONG).show()
+    elseif string.find(selectedOption, "Delete") then
+      if isPublic then
+        table.remove(publicFeedMessages, msgIndex)
+        updatePublicFeedUI()
+      else
+        if privateChatHistory[targetName] then
+          table.remove(privateChatHistory[targetName], msgIndex)
+          updatePrivateChatUI(targetName)
+        end
+      end
+      announce("Message deleted.")
+    end
+  end)
+  builder.show()
+end
+
+function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
+  local emojis = { "👍 Like", "❤️ Love", "😂 Laugh", "😮 Wow", "😢 Sad", "🔥 Fire" }
+  local emojiCodes = { "👍", "❤️", "😂", "😮", "😢", "🔥" }
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Choose Reaction")
+  builder.setItems(emojis, function(dialog, which)
+    local chosenEmoji = emojiCodes[which + 1]
+    msgItem.reaction = chosenEmoji
+    if isPublic then
+      updatePublicFeedUI()
+    else
+      updatePrivateChatUI(targetName)
+    end
+    announce("Reacted with " .. emojis[which + 1] .. " to message")
+  end)
+  builder.show()
+end
+
+-- --------------------------------------------------------------------
 -- 1. WHATSAPP & MESSENGER STYLED LOGIN SCREEN
 -- --------------------------------------------------------------------
 local loginLayout = {
@@ -544,7 +731,7 @@ local loginLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 2. HOMEPAGE / DASHBOARD LAYOUT (WHATSAPP/MESSENGER STYLE)
+-- 2. HOMEPAGE / DASHBOARD LAYOUT
 -- --------------------------------------------------------------------
 local dashboardLayout = {
   LinearLayout;
@@ -588,14 +775,14 @@ local dashboardLayout = {
   {
     Button;
     id = "btnOpenPrivateChats";
-    text = "💬 Private Chats & Online Users";
+    text = "💬 Private Chats (Online Users Only)";
     layout_width = "fill";
     layout_height = "65dp";
     layout_marginBottom = "15dp";
     backgroundColor = "#075E54";
     textColor = "#FFFFFF";
     textSize = "18sp";
-    ContentDescription = "Private Chats button. Double tap to view online users and chat privately.";
+    ContentDescription = "Private Chats button. Double tap to view currently active online users.";
   };
   {
     Button;
@@ -623,7 +810,7 @@ local dashboardLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 3. PUBLIC FEED SCREEN LAYOUT (WHATSAPP TEAL HEADER)
+-- 3. PUBLIC FEED SCREEN LAYOUT (WITH SAVE LOCAL & VOICE BUTTONS)
 -- --------------------------------------------------------------------
 local publicFeedLayout = {
   LinearLayout;
@@ -637,7 +824,7 @@ local publicFeedLayout = {
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
-    padding = "12dp";
+    padding = "10dp";
     backgroundColor = "#075E54";
     {
       Button;
@@ -649,12 +836,20 @@ local publicFeedLayout = {
     };
     {
       TextView;
-      text = "Public Feed Room";
-      textSize = "20sp";
+      text = "Public Feed";
+      textSize = "18sp";
       textColor = "#FFFFFF";
-      layout_marginLeft = "15dp";
+      layout_marginLeft = "8dp";
       layout_weight = "1";
       ContentDescription = "Public Feed room.";
+    };
+    {
+      Button;
+      id = "btnSavePublicChatLocal";
+      text = "📥 Save";
+      textColor = "#FFFFFF";
+      backgroundColor = "#128C7E";
+      ContentDescription = "Save Public Chat Locally button";
     };
   };
   {
@@ -678,12 +873,21 @@ local publicFeedLayout = {
     {
       EditText;
       id = "editPublicMessageInput";
-      hint = "Type public message...";
+      hint = "Type message...";
       layout_weight = "1";
       textSize = "16sp";
-      padding = "14dp";
+      padding = "12dp";
       backgroundColor = "#FFFFFF";
-      ContentDescription = "Public message text field. Type message to post publicly.";
+      ContentDescription = "Public message text field.";
+    };
+    {
+      Button;
+      id = "btnRecordPublicVoice";
+      text = "🎙️ Voice";
+      backgroundColor = "#455A64";
+      textColor = "#FFFFFF";
+      layout_marginLeft = "4dp";
+      ContentDescription = "Record Voice message button";
     };
     {
       Button;
@@ -691,14 +895,14 @@ local publicFeedLayout = {
       text = "Post";
       backgroundColor = "#075E54";
       textColor = "#FFFFFF";
-      layout_marginLeft = "8dp";
-      ContentDescription = "Post public message button. Double tap to publish.";
+      layout_marginLeft = "4dp";
+      ContentDescription = "Post public message button";
     };
   };
 }
 
 -- --------------------------------------------------------------------
--- 4. PRIVATE CHATS DIRECTORY LAYOUT
+-- 4. PRIVATE CHATS DIRECTORY LAYOUT (ONLINE USERS ONLY)
 -- --------------------------------------------------------------------
 local privateDirectoryLayout = {
   LinearLayout;
@@ -721,12 +925,12 @@ local privateDirectoryLayout = {
     };
     {
       TextView;
-      text = "Private Conversations";
+      text = "Active Online Users";
       textSize = "18sp";
       textColor = "#075E54";
       layout_marginLeft = "10dp";
       layout_weight = "1";
-      ContentDescription = "Private Conversations directory. Select an online user to chat with.";
+      ContentDescription = "Currently Active Online Users directory.";
     };
     {
       Button;
@@ -745,7 +949,7 @@ local privateDirectoryLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 5. PRIVATE CHAT ROOM LAYOUT (WHATSAPP BUBBLE STYLED)
+-- 5. PRIVATE CHAT ROOM LAYOUT (WITH SAVE LOCAL & VOICE BUTTONS)
 -- --------------------------------------------------------------------
 local chatLayout = {
   LinearLayout;
@@ -759,7 +963,7 @@ local chatLayout = {
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
-    padding = "12dp";
+    padding = "10dp";
     backgroundColor = "#075E54";
     {
       Button;
@@ -775,9 +979,17 @@ local chatLayout = {
       text = "Private Chat";
       textSize = "18sp";
       textColor = "#FFFFFF";
-      layout_marginLeft = "15dp";
+      layout_marginLeft = "8dp";
       layout_weight = "1";
       ContentDescription = "Currently chatting in private room.";
+    };
+    {
+      Button;
+      id = "btnSavePrivateChatLocal";
+      text = "📥 Save";
+      textColor = "#FFFFFF";
+      backgroundColor = "#128C7E";
+      ContentDescription = "Save Private Chat Locally button";
     };
   };
   {
@@ -804,9 +1016,18 @@ local chatLayout = {
       hint = "Type message...";
       layout_weight = "1";
       textSize = "16sp";
-      padding = "14dp";
+      padding = "12dp";
       backgroundColor = "#FFFFFF";
-      ContentDescription = "Private message text field. Type your message here.";
+      ContentDescription = "Private message text field.";
+    };
+    {
+      Button;
+      id = "btnRecordPrivateVoice";
+      text = "🎙️ Voice";
+      backgroundColor = "#455A64";
+      textColor = "#FFFFFF";
+      layout_marginLeft = "4dp";
+      ContentDescription = "Record Voice message button";
     };
     {
       Button;
@@ -814,8 +1035,8 @@ local chatLayout = {
       text = "Send";
       backgroundColor = "#075E54";
       textColor = "#FFFFFF";
-      layout_marginLeft = "8dp";
-      ContentDescription = "Send private message button. Double tap to send.";
+      layout_marginLeft = "4dp";
+      ContentDescription = "Send private message button";
     };
   };
 }
@@ -867,7 +1088,7 @@ function showDashboardScreen()
   end
   
   btnOpenPrivateChats.onClick = function()
-    announce("Opening Private Chats Directory")
+    announce("Opening Active Online Users Directory")
     showPrivateDirectoryScreen()
   end
   
@@ -895,6 +1116,14 @@ function showPublicFeedScreen()
   btnPublicToHome.onClick = function()
     announce("Returning to Home Dashboard")
     showDashboardScreen()
+  end
+  
+  btnSavePublicChatLocal.onClick = function()
+    saveChatLocally("PublicFeed", "Global", publicFeedMessages)
+  end
+  
+  btnRecordPublicVoice.onClick = function()
+    toggleVoiceRecording(true, "")
   end
   
   fetchPublicFeedMessages()
@@ -980,10 +1209,14 @@ function updatePublicFeedUI()
   if type(publicFeedMessages) == "table" then
     for _, m in ipairs(publicFeedMessages) do
       if type(m) == "table" then
+        local textStr = m.text or ""
+        if m.reaction and m.reaction ~= "" then
+          textStr = textStr .. " [" .. m.reaction .. "]"
+        end
         table.insert(data, {
           msgSender = m.sender or "Anonymous",
           msgTime = m.time or "",
-          msgText = m.text or ""
+          msgText = textStr
         })
       end
     end
@@ -991,10 +1224,18 @@ function updatePublicFeedUI()
   
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listPublicMessages.setAdapter(adapter)
+  
+  listPublicMessages.onItemClick = function(parent, view, position, id)
+    local idx = position + 1
+    local selectedMsg = publicFeedMessages[idx]
+    if selectedMsg then
+      showMessageOptionsDialog(selectedMsg, idx, true, "")
+    end
+  end
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHATS DIRECTORY CONTROLLER
+-- PRIVATE CHATS DIRECTORY CONTROLLER (ONLINE USERS ONLY)
 -- --------------------------------------------------------------------
 function showPrivateDirectoryScreen()
   activeScreen = "private_directory"
@@ -1008,7 +1249,7 @@ function showPrivateDirectoryScreen()
   fetchOnlineUsersList()
   
   btnRefreshUsers.onClick = function()
-    announce("Refreshing online users directory...")
+    announce("Refreshing active online users directory...")
     fetchOnlineUsersList()
   end
 end
@@ -1017,14 +1258,18 @@ function fetchOnlineUsersList()
   apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
     if success and data and type(data) == "table" then
       local filtered = {}
+      local now_ts = os.time()
       for _, u in ipairs(data) do
         if type(u) == "table" then
           local name = u.name or u.username
-          if name and name ~= currentUser.name then
-            local statusText = u.status or (u.online and "Online" or "Offline")
+          local lastSeen = tonumber(u.last_seen or 0) or 0
+          local isOnline = u.status == "Online" or u.online == true or (now_ts - lastSeen <= 70)
+          
+          -- STRICT FILTER: Show ONLY currently active online users (Hide offline users)
+          if name and name ~= currentUser.name and isOnline then
             table.insert(filtered, {
               name = name,
-              status = statusText
+              status = "Online"
             })
           end
         end
@@ -1065,7 +1310,7 @@ function updatePrivateDirectoryUI()
       if type(u) == "table" then
         table.insert(data, { 
           itemName = u.name or "User", 
-          itemStatus = "● " .. (u.status or "Online")
+          itemStatus = "● Online"
         })
       end
     end
@@ -1082,7 +1327,7 @@ function updatePrivateDirectoryUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER (WHATSAPP GREEN & WHITE BUBBLES)
+-- PRIVATE CHAT ROOM CONTROLLER (WITH SAVE LOCAL & VOICE BUTTONS)
 -- --------------------------------------------------------------------
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
@@ -1093,6 +1338,15 @@ function showPrivateChatScreen(targetUsername)
   
   txtChatTargetHeader.setText("Chat: " .. targetUsername)
   txtChatTargetHeader.setContentDescription("Currently chatting in private room with " .. targetUsername)
+  
+  btnSavePrivateChatLocal.onClick = function()
+    local msgs = privateChatHistory[targetUsername] or {}
+    saveChatLocally("PrivateChat", targetUsername, msgs)
+  end
+  
+  btnRecordPrivateVoice.onClick = function()
+    toggleVoiceRecording(false, targetUsername)
+  end
   
   fetchPrivateChatThread(targetUsername)
   
@@ -1119,7 +1373,7 @@ function showPrivateChatScreen(targetUsername)
   
   btnBackToPrivateList.onClick = function()
     activeChatTarget = ""
-    announce("Returning to private chats directory")
+    announce("Returning to active online users directory")
     showPrivateDirectoryScreen()
   end
 end
@@ -1189,10 +1443,14 @@ function updatePrivateChatUI(targetUsername)
     for _, m in ipairs(msgs) do
       if type(m) == "table" then
         local senderLabel = (m.sender == currentUser.name) and "Me" or (m.sender or targetUsername)
+        local textStr = m.text or ""
+        if m.reaction and m.reaction ~= "" then
+          textStr = textStr .. " [" .. m.reaction .. "]"
+        end
         table.insert(data, {
           msgSender = senderLabel,
           msgTime = m.time or "",
-          msgText = m.text or ""
+          msgText = textStr
         })
       end
     end
@@ -1200,6 +1458,14 @@ function updatePrivateChatUI(targetUsername)
   
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listChatMessages.setAdapter(adapter)
+  
+  listChatMessages.onItemClick = function(parent, view, position, id)
+    local idx = position + 1
+    local selectedMsg = msgs[idx]
+    if selectedMsg then
+      showMessageOptionsDialog(selectedMsg, idx, false, targetUsername)
+    end
+  end
 end
 
 -- --------------------------------------------------------------------
