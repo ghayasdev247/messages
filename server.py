@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.6.1",
-                "version_code": 20,
+                "version": "1.6.2",
+                "version_code": 21,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.6.1: Safe Typeface.DEFAULT_BOLD integration and AbsListView margin protection."
+                "changelog": "Version 1.6.2: Fixed android.util.Base64 parameter type error with pure Lua Base64 encoder/decoder."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

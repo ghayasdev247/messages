@@ -1,8 +1,8 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.6.0 (Build Code: 19)
--- Features: AAC HD Voice Recording, Android SDK Native Base64 Audio Engine,
+-- Version: 1.6.2 (Build Code: 21)
+-- Features: AAC HD Voice Recording, Pure Lua Base64 Audio Engine,
 --           Cached Playback, Ephemeral Audio Storage Purge & Cloud Auto-Cleanup
 -- ====================================================================
 
@@ -12,18 +12,16 @@ import "android.os.*"
 import "android.widget.*"
 import "android.view.*"
 import "android.graphics.*"
+import "android.graphics.Typeface"
 import "android.text.InputType"
 import "android.content.Context"
-import "android.util.Base64"
 import "java.io.File"
-import "java.io.FileInputStream"
-import "java.io.FileOutputStream"
 
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.6.1"
-local APP_VERSION_CODE = 20
+local APP_VERSION = "1.6.2"
+local APP_VERSION_CODE = 21
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -74,7 +72,7 @@ function getChatFilePath(u1, u2)
 end
 
 -- --------------------------------------------------------------------
--- JSON & NATIVE ANDROID BASE64 UTILITIES (100% Binary Safe)
+-- JSON & PURE LUA BASE64 UTILITIES (100% Binary Safe)
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -118,17 +116,46 @@ function encodeJSON(val)
   end
 end
 
+local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+function base64Encode(data)
+  if not data or data == "" then return "" end
+  return ((data:gsub('.', function(x) 
+    local r,b='',x:byte()
+    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
+    return r
+  end)..'0000'):gsub('%d%d%d?%d?%d?', function(x)
+    if (#x < 6) then return '' end
+    local c=0
+    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
+    return b64chars:sub(c+1,c+1)
+  end)..({ '', '==', '=' })[#data%3+1])
+end
+
+function base64Decode(data)
+  if not data or data == "" then return "" end
+  data = string.gsub(data, '[^'..b64chars..'=]', '')
+  return (data:gsub('=', ''):gsub('.', function(x)
+    if (x == '=') then return '' end
+    local r,f='',(b64chars:find(x)-1)
+    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+    return r
+  end):gsub('%d%d%d?%d?%d?', function(x)
+    if (#x ~= 8) then return '' end
+    local c=0
+    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+    return string.char(c)
+  end))
+end
+
 function encodeAudioFileToBase64(filePath)
   local b64Result = ""
   pcall(function()
-    local f = File(filePath)
-    if f.exists() and f.length() > 0 then
-      local size = f.length()
-      local bytes = byte[size]
-      local fis = FileInputStream(f)
-      fis.read(bytes)
-      fis.close()
-      b64Result = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    local f = io.open(filePath, "rb")
+    if f then
+      local data = f:read("*a")
+      f:close()
+      b64Result = base64Encode(data)
     end
   end)
   return b64Result
@@ -138,12 +165,14 @@ function decodeBase64ToAudioFile(b64Data, targetPath)
   local success = false
   pcall(function()
     local cleanB64 = b64Data:gsub("^data:audio/[%w%+]+;base64,", "")
-    local bytes = Base64.decode(cleanB64, Base64.DEFAULT)
-    if bytes and #bytes > 0 then
-      local fos = FileOutputStream(File(targetPath))
-      fos.write(bytes)
-      fos.close()
-      success = true
+    local decodedBytes = base64Decode(cleanB64)
+    if decodedBytes and #decodedBytes > 0 then
+      local f = io.open(targetPath, "wb")
+      if f then
+        f:write(decodedBytes)
+        f:close()
+        success = true
+      end
     end
   end)
   return success
@@ -259,7 +288,7 @@ function fetchGitHubFile(filePath, callback)
     if code == 200 then
       local resp = decodeJSON(content)
       if resp and resp.content then
-        local rawData = Base64.decode(resp.content:gsub("%s+", ""), Base64.DEFAULT)
+        local rawData = base64Decode(resp.content:gsub("%s+", ""))
         callback(true, decodeJSON(rawData), resp.sha)
       else
         callback(false, nil, nil)
@@ -285,7 +314,7 @@ function commitGitHubFile(filePath, newTableData, commitMessage, callback)
   fetchGitHubFile(filePath, function(ok, currentData, sha)
     local payload = {
       message = commitMessage,
-      content = Base64.encodeToString(encodeJSON(newTableData), Base64.NO_WRAP),
+      content = base64Encode(encodeJSON(newTableData)),
       branch = GITHUB_BRANCH
     }
     if sha then payload.sha = sha end
