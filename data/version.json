@@ -1,7 +1,7 @@
 {
-  "version": "1.0.2",
-  "version_code": 3,
+  "version": "1.0.10",
+  "version_code": 10,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 1.0.2: Modern card UI layout, screen reader focus stability fix, and remote auto-update engine."
+  "changelog": "Version 1.0.10: Guaranteed automatic remote live updating and instant GitHub script hot reloading."
 }
