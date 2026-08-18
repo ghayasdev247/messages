@@ -1,7 +1,7 @@
 {
-  "version": "1.1.2",
-  "version_code": 13,
+  "version": "1.1.3",
+  "version_code": 14,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
-  "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 1.1.2: Fixed table.insert type crash & loadlayout setTextStyle/setMargins errors; Redesigned WhatsApp & Facebook Messenger UI."
+  "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
+  "changelog": "Version 1.1.3: Direct plugin overwrite support and Version 1.1.3 manifest."
 }

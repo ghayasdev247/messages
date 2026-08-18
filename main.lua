@@ -1,7 +1,7 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.1.2 (Build Code: 13)
+-- Version: 1.1.3 (Build Code: 14)
 -- Features: Modern WhatsApp & Facebook Messenger Card UI
 -- Primary Cloud Engine: Live Firebase Realtime Database (messages-server-f2a99)
 -- Failover Cloud Engine: GitHub REST API (ghayasdev247/messages) + Local PC API
@@ -19,8 +19,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.1.2"
-local APP_VERSION_CODE = 13
+local APP_VERSION = "1.1.3"
+local APP_VERSION_CODE = 14
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -266,29 +266,33 @@ function saveUpdateFile(versionStr, uContent)
   
   local fileName = "Accessible_Messenger_v" .. versionStr .. ".lua"
   local savePath = downloadDir .. "/" .. fileName
-  local savedSuccess = false
   
   pcall(function()
     local file = io.open(savePath, "w")
     if file then
       file:write(uContent)
       file:close()
-      savedSuccess = true
     end
   end)
   
-  if not savedSuccess then
-    savePath = activity.getFilesDir().getAbsolutePath() .. "/" .. fileName
+  -- Also attempt to overwrite plugin main.lua directly in Jieshuo tool directories
+  local jieshuoPaths = {
+    "/sdcard/JieShuo/tools/Chatify Accessible Messenger for the Blind/main.lua",
+    "/sdcard/JieShuo/tools/Accessible Messenger/main.lua",
+    activity.getFilesDir().getAbsolutePath() .. "/main.lua"
+  }
+  
+  for _, jPath in ipairs(jieshuoPaths) do
     pcall(function()
-      local file = io.open(savePath, "w")
-      if file then
-        file:write(uContent)
-        file:close()
+      local f = io.open(jPath, "w")
+      if f then
+        f:write(uContent)
+        f:close()
       end
     end)
   end
   
-  announce("The update is successful. Re-import the plugin to continue. Saved to Download folder: " .. fileName)
+  announce("Update v" .. versionStr .. " successful! Saved to Download folder: " .. fileName .. ". Re-import plugin in Jieshuo to apply.")
 end
 
 -- --------------------------------------------------------------------
@@ -627,7 +631,7 @@ local publicFeedLayout = {
   layout_width = "fill";
   layout_height = "fill";
   padding = "12dp";
-  backgroundColor = "#E5DDD5"; -- WhatsApp Chat Wallpaper Background Tint
+  backgroundColor = "#E5DDD5";
   {
     LinearLayout;
     orientation = "horizontal";
@@ -749,7 +753,7 @@ local chatLayout = {
   layout_width = "fill";
   layout_height = "fill";
   padding = "12dp";
-  backgroundColor = "#E5DDD5"; -- WhatsApp Chat Background Color Tint
+  backgroundColor = "#E5DDD5";
   {
     LinearLayout;
     orientation = "horizontal";

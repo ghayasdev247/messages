@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.1.2",
-                "version_code": 13,
+                "version": "1.1.3",
+                "version_code": 14,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.1.2: Fixed table.insert crash and setTextStyle/setMargins errors with WhatsApp UI redesign."
+                "changelog": "Version 1.1.3: Direct plugin overwrite support and Version 1.1.3 manifest."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
