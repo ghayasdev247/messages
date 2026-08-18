@@ -2,7 +2,7 @@
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
 -- Features: Public Feed, Deterministic Private Messaging, Accessibility & Jieshuo Optimized
--- Backend: Unified Cross-Device Real-Time Sync & GitHub Remote Auto-Updates
+-- Backend: Unified Cross-Device Real-Time Sync & Dual Network Auto-Updates (Local Wi-Fi + GitHub)
 -- ====================================================================
 
 require "import"
@@ -100,47 +100,27 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- REMOTE AUTO-UPDATE ENGINE (GitHub Hot Reloading)
+-- DUAL NETWORK AUTO-UPDATE ENGINE (Local Wi-Fi + GitHub Remote)
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
-    announce("Checking GitHub for remote updates...")
+    announce("Checking for updates on Local Wi-Fi Network & GitHub...")
   end
   
-  local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
-  Http.get(checkUrl, function(code, content)
-    if code == 200 then
-      local manifest = decodeJSON(content)
+  -- Priority 1: Check Local Wi-Fi Network Update API
+  Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
+    if lCode == 200 then
+      local manifest = decodeJSON(lContent)
       if manifest and manifest.version_code then
         local remoteCode = tonumber(manifest.version_code) or 1
         if remoteCode > APP_VERSION_CODE then
           local versionStr = manifest.version or tostring(remoteCode)
-          announce("New update found: Version " .. versionStr .. ". Downloading live update from GitHub...")
+          announce("New update found on Local Network: Version " .. versionStr .. ". Downloading update...")
           
-          -- Download latest main.lua script from GitHub
-          local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
-          Http.get(updateUrl, function(uCode, uContent)
+          Http.get(BACKEND_URL .. "/api/download-lua", function(uCode, uContent)
             if uCode == 200 and uContent and uContent ~= "" then
-              pcall(function()
-                local savePath = activity.getFilesDir().getAbsolutePath() .. "/main.lua"
-                local file = io.open(savePath, "w")
-                if file then
-                  file:write(uContent)
-                  file:close()
-                end
-              end)
-              
-              announce("Update v" .. versionStr .. " downloaded! Hot reloading application...")
-              
-              -- Instant Hot Reloading in AndroLua+
-              pcall(function()
-                local func, err = loadstring(uContent)
-                if func then
-                  func()
-                end
-              end)
-            else
-              announce("Failed to download update script. Please try again.")
+              applyDownloadedUpdate(versionStr, uContent)
+              return
             end
           end)
           return
@@ -148,8 +128,53 @@ function checkForRemoteUpdates(manualCheck)
       end
     end
     
-    if manualCheck then
-      announce("You are using the latest version of Accessible Messenger (v" .. APP_VERSION .. ").")
+    -- Priority 2: Check GitHub Remote Update API
+    local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
+    Http.get(checkUrl, function(code, content)
+      if code == 200 then
+        local manifest = decodeJSON(content)
+        if manifest and manifest.version_code then
+          local remoteCode = tonumber(manifest.version_code) or 1
+          if remoteCode > APP_VERSION_CODE then
+            local versionStr = manifest.version or tostring(remoteCode)
+            announce("New update found on GitHub: Version " .. versionStr .. ". Downloading update...")
+            
+            local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
+            Http.get(updateUrl, function(uCode, uContent)
+              if uCode == 200 and uContent and uContent ~= "" then
+                applyDownloadedUpdate(versionStr, uContent)
+              else
+                announce("Failed to download update script from GitHub.")
+              end
+            end)
+            return
+          end
+        end
+      end
+      
+      if manualCheck then
+        announce("You are using the latest version of Accessible Messenger (v" .. APP_VERSION .. ").")
+      end
+    end)
+  end)
+end
+
+function applyDownloadedUpdate(versionStr, uContent)
+  pcall(function()
+    local savePath = activity.getFilesDir().getAbsolutePath() .. "/main.lua"
+    local file = io.open(savePath, "w")
+    if file then
+      file:write(uContent)
+      file:close()
+    end
+  end)
+  
+  announce("Update v" .. versionStr .. " downloaded successfully! Hot reloading application...")
+  
+  pcall(function()
+    local func, err = loadstring(uContent)
+    if func then
+      func()
     end
   end)
 end
@@ -291,14 +316,14 @@ local loginLayout = {
   {
     Button;
     id = "btnCheckUpdate";
-    text = "🔄 Check for Remote Updates";
+    text = "🔄 Check for Auto Updates";
     layout_width = "fill";
     layout_height = "45dp";
     layout_marginTop = "10dp";
     backgroundColor = "#455A64";
     textColor = "#FFFFFF";
     textSize = "14sp";
-    ContentDescription = "Check for Remote Updates button. Double tap to check GitHub for updates.";
+    ContentDescription = "Check for Auto Updates button. Double tap to check Local Network and GitHub for updates.";
   };
 }
 
@@ -365,14 +390,14 @@ local dashboardLayout = {
   {
     Button;
     id = "btnCheckUpdateHome";
-    text = "🔄 Check for GitHub Updates";
+    text = "🔄 Check for Updates";
     layout_width = "fill";
     layout_height = "50dp";
     layout_marginBottom = "15dp";
     backgroundColor = "#455A64";
     textColor = "#FFFFFF";
     textSize = "15sp";
-    ContentDescription = "Check for GitHub Updates button. Double tap to check for app updates.";
+    ContentDescription = "Check for Updates button. Double tap to check Local Network and GitHub for updates.";
   };
 
   -- Logout Button
@@ -591,7 +616,7 @@ function showLoginScreen()
   isPolling = false
   activity.setContentView(loadlayout(loginLayout))
   
-  -- Auto-check for remote updates on startup
+  -- Auto-check for updates on startup (Local Wi-Fi + GitHub Remote)
   checkForRemoteUpdates(false)
   
   btnCheckUpdate.onClick = function()

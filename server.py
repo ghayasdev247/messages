@@ -2,6 +2,7 @@
 Chatify Accessible Messenger Unified Backend Server
 Built with Python standard library (http.server + sqlite3)
 Syncs automatically with GitHub repository ghayasdev247/messages and local database.
+Includes Local Network Auto-Update API endpoints (/api/version & /api/download-lua).
 """
 
 import os
@@ -55,7 +56,6 @@ def init_db():
     conn.commit()
     conn.close()
     
-    # Initialize initial sample messages if empty
     sync_file_storage()
 
 def sync_file_storage():
@@ -86,7 +86,6 @@ def sync_file_storage():
     conn.close()
 
 def push_git_background():
-    """Pushes local file changes to GitHub repository in background."""
     def _git_task():
         try:
             sync_file_storage()
@@ -100,9 +99,9 @@ def push_git_background():
 
 class RequestHandler(http.server.BaseHTTPRequestHandler):
 
-    def _set_headers(self, status_code=200):
+    def _set_headers(self, status_code=200, content_type="application/json"):
         self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -203,7 +202,6 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             cursor.execute("INSERT OR REPLACE INTO users (username, password, last_seen) VALUES (?, COALESCE((SELECT password FROM users WHERE username=?), '123'), ?)", (sender, sender, now_ts))
             conn.commit()
 
-            # Save to deterministic JSON file
             u1_lower, u2_lower = sender.lower(), recipient.lower()
             file_name = f"{sender}_{recipient}.json" if u1_lower < u2_lower else f"{recipient}_{sender}.json"
             chat_path = os.path.join("data", "chats", file_name)
@@ -238,7 +236,26 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         cursor = conn.cursor()
         now_ts = int(time.time())
 
-        if path == "/api/public-feed":
+        if path == "/api/version":
+            version_data = {
+                "success": True,
+                "version": "1.0.1",
+                "version_code": 2,
+                "download_url": "/api/download-lua",
+                "changelog": "Local Wi-Fi & Remote GitHub Auto-Update Engine."
+            }
+            self._set_headers(200)
+            self.wfile.write(json.dumps(version_data).encode("utf-8"))
+
+        elif path == "/api/download-lua":
+            self._set_headers(200, "text/plain; charset=utf-8")
+            if os.path.exists("main.lua"):
+                with open("main.lua", "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.wfile.write(b"-- main.lua missing")
+
+        elif path == "/api/public-feed":
             cursor.execute("SELECT sender, text, timestamp FROM public_messages ORDER BY id ASC LIMIT 100")
             rows = cursor.fetchall()
             messages = [{"sender": r[0], "text": r[1], "time": r[2]} for r in rows]
