@@ -2,7 +2,7 @@
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
 -- Features: Public Feed, Private Messaging, Accessibility & Jieshuo Optimized
--- Backend: Connected to Python REST API Server (server.py)
+-- Backend: GitHub Native Serverless (ghayasdev247/messages) & REST API
 -- ====================================================================
 
 require "import"
@@ -17,12 +17,15 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
--- Server Backend URL Configuration
--- Default for Android Emulator: "http://10.0.2.2:5000"
--- For Physical Devices on same Wi-Fi: Replace with your PC's IP (e.g., "http://192.168.1.10:5000")
-local BACKEND_URL = "http://10.0.2.2:5000"
+local GITHUB_OWNER = "ghayasdev247"
+local GITHUB_REPO = "messages"
+local GITHUB_BRANCH = "main"
 
-local currentUser = { name = "", online = false }
+-- Fallback local server URL if using local server instead of raw GitHub
+local BACKEND_URL = "http://10.0.2.2:5000"
+local USE_GITHUB_SERVERLESS = true
+
+local currentUser = { name = "", online = false, githubToken = "" }
 local activeScreen = "login" -- "login", "dashboard", "public_feed", "private_directory", "private_chat"
 local activeChatTarget = ""
 local pollingHandler = nil
@@ -36,7 +39,7 @@ local lastPublicMessageCount = 0
 local lastPrivateMessageCount = 0
 
 -- --------------------------------------------------------------------
--- JSON & HTTP UTILITIES
+-- JSON & BASE64 UTILITIES
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -47,7 +50,6 @@ function decodeJSON(str)
     local ok, res = pcall(jsonModule.decode, str)
     if ok then return res end
   end
-  -- Fallback basic JSON parser if cjson module is missing
   local ok, res = pcall(loadstring("return " .. str:gsub('"(%w+)":', '["%1"]=')))
   if ok then return res end
   return nil
@@ -58,7 +60,6 @@ function encodeJSON(tbl)
     local ok, res = pcall(jsonModule.encode, tbl)
     if ok then return res end
   end
-  -- Fallback JSON serializer
   local parts = {}
   for k, v in pairs(tbl) do
     if type(v) == "string" then
@@ -70,11 +71,84 @@ function encodeJSON(tbl)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
+local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+function base64Encode(data)
+  return ((data:gsub('.', function(x) 
+    local r,b='',x:byte()
+    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
+    return r
+  end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+    if (#x < 6) then return '' end
+    local c=0
+    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
+    return b64chars:sub(c+1,c+1)
+  end)..({ '', '==', '=' })[#data%3+1])
+end
+
 -- Helper function to make Jieshuo/Screen reader announcements
 function announce(text)
   pcall(function()
     Toast.makeText(activity, text, Toast.LENGTH_SHORT).show()
     activity.getWindow().getDecorView().announceForAccessibility(text)
+  end)
+end
+
+-- --------------------------------------------------------------------
+-- GITHUB REST API WRAPPER
+-- --------------------------------------------------------------------
+function fetchRawGitHubData(filePath, callback)
+  local rawUrl = string.format("https://raw.githubusercontent.com/%s/%s/%s/%s?t=%d", 
+    GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH, filePath, os.time())
+  
+  Http.get(rawUrl, function(code, content)
+    if code == 200 then
+      local data = decodeJSON(content)
+      callback(true, data)
+    else
+      -- Fallback to local BACKEND_URL if GitHub raw fetch fails
+      Http.get(BACKEND_URL .. "/api/" .. filePath:gsub("data/", ""):gsub(".json", ""), function(c2, cnt2)
+        if c2 == 200 then
+          callback(true, decodeJSON(cnt2))
+        else
+          callback(false, nil)
+        end
+      end)
+    end
+  end)
+end
+
+function commitGitHubData(filePath, contentStr, commitMessage, callback)
+  local apiUrl = string.format("https://api.github.com/repos/%s/%s/contents/%s", GITHUB_OWNER, GITHUB_REPO, filePath)
+  local headers = {}
+  headers["User-Agent"] = "ChatifyApp"
+  if currentUser.githubToken and currentUser.githubToken ~= "" then
+    headers["Authorization"] = "token " .. currentUser.githubToken
+  end
+
+  -- Step 1: Get current file SHA hash
+  Http.get(apiUrl, nil, nil, headers, function(code, content)
+    local sha = nil
+    if code == 200 then
+      local info = decodeJSON(content)
+      if info and info.sha then sha = info.sha end
+    end
+    
+    -- Step 2: Push updated contents
+    local payload = {
+      message = commitMessage,
+      content = base64Encode(contentStr),
+      branch = GITHUB_BRANCH
+    }
+    if sha then payload.sha = sha end
+    
+    Http.post(apiUrl, encodeJSON(payload), nil, nil, headers, function(pCode, pContent)
+      if pCode == 200 or pCode == 201 then
+        callback(true)
+      else
+        -- Fallback to REST backend
+        callback(false)
+      end
+    end)
   end)
 end
 
@@ -99,11 +173,11 @@ local loginLayout = {
   };
   {
     TextView;
-    text = "Anonymous Identity Login";
+    text = "GitHub-Native Serverless Login";
     textSize = "16sp";
     textColor = "#555555";
     layout_gravity = "center";
-    layout_marginBottom = "20dp";
+    layout_marginBottom = "15dp";
   };
   -- Username Input
   {
@@ -111,7 +185,7 @@ local loginLayout = {
     text = "Step 1: Enter Username";
     textSize = "16sp";
     textColor = "#222222";
-    layout_marginTop = "10dp";
+    layout_marginTop = "5dp";
   };
   {
     EditText;
@@ -128,7 +202,7 @@ local loginLayout = {
     text = "Step 2: Enter Password";
     textSize = "16sp";
     textColor = "#222222";
-    layout_marginTop = "15dp";
+    layout_marginTop = "10dp";
   };
   {
     EditText;
@@ -140,36 +214,35 @@ local loginLayout = {
     padding = "12dp";
     ContentDescription = "Password edit box. Type your password here.";
   };
-  -- Backend Host Config Field
+  -- Optional GitHub Personal Access Token Field
   {
     TextView;
-    text = "Server Address";
+    text = "GitHub Token (Optional for write access)";
     textSize = "14sp";
     textColor = "#777777";
-    layout_marginTop = "15dp";
+    layout_marginTop = "10dp";
   };
   {
     EditText;
-    id = "editServerUrl";
-    text = BACKEND_URL;
-    hint = "http://10.0.2.2:5000";
+    id = "editGithubToken";
+    hint = "ghp_xxxxxxxxxxxx";
     layout_width = "fill";
     textSize = "14sp";
     padding = "8dp";
-    ContentDescription = "Server URL edit box. Modify if connecting to custom server IP.";
+    ContentDescription = "GitHub Personal Access Token input field.";
   };
   -- Login Button
   {
     Button;
     id = "btnLogin";
-    text = "Connect to Messenger";
+    text = "Connect via GitHub";
     layout_width = "fill";
     layout_height = "60dp";
-    layout_marginTop = "25dp";
+    layout_marginTop = "20dp";
     backgroundColor = "#1565C0";
     textColor = "#FFFFFF";
     textSize = "18sp";
-    ContentDescription = "Connect to Messenger button. Double tap to sign in or register anonymously.";
+    ContentDescription = "Connect via GitHub button. Double tap to sign in.";
   };
 }
 
@@ -196,33 +269,33 @@ local dashboardLayout = {
   {
     TextView;
     id = "txtLoggedAs";
-    text = "Status: Online";
-    textSize = "16sp";
+    text = "Status: Connected to ghayasdev247/messages";
+    textSize = "15sp";
     textColor = "#2E7D32";
     layout_gravity = "center";
     layout_marginBottom = "25dp";
-    ContentDescription = "Status indicator: Online as user.";
+    ContentDescription = "Status indicator: Connected to GitHub repository.";
   };
   
   -- Public Feed Button
   {
     Button;
     id = "btnOpenPublicFeed";
-    text = "🌐 Public Feed";
+    text = "🌐 Public Feed (GitHub Managed)";
     layout_width = "fill";
     layout_height = "70dp";
     layout_marginBottom = "20dp";
     backgroundColor = "#0288D1";
     textColor = "#FFFFFF";
     textSize = "18sp";
-    ContentDescription = "Public Feed button. Double tap to view or send public messages visible to all users.";
+    ContentDescription = "Public Feed button. Double tap to view or send public messages on GitHub.";
   };
   
   -- Private Chats Directory Button
   {
     Button;
     id = "btnOpenPrivateChats";
-    text = "💬 Private Chats & User List";
+    text = "💬 Private Chats & Online Users";
     layout_width = "fill";
     layout_height = "70dp";
     layout_marginBottom = "20dp";
@@ -274,12 +347,12 @@ local publicFeedLayout = {
     };
     {
       TextView;
-      text = "Public Feed";
+      text = "Public Feed (GitHub)";
       textSize = "20sp";
       textColor = "#FFFFFF";
       layout_marginLeft = "15dp";
       layout_weight = "1";
-      ContentDescription = "Public Feed room. Messages sent here are public.";
+      ContentDescription = "Public Feed room managed via GitHub.";
     };
   };
   -- Messages List
@@ -306,7 +379,7 @@ local publicFeedLayout = {
       layout_weight = "1";
       textSize = "16sp";
       padding = "12dp";
-      ContentDescription = "Public message text field. Type message to post publicly.";
+      ContentDescription = "Public message text field. Type message to post to GitHub repository.";
     };
     {
       Button;
@@ -441,7 +514,7 @@ local chatLayout = {
 }
 
 -- --------------------------------------------------------------------
--- SCREEN CONTROLLERS & REAL BACKEND NETWORKING
+-- SCREEN CONTROLLERS & GITHUB NETWORKING
 -- --------------------------------------------------------------------
 
 function showLoginScreen()
@@ -452,33 +525,20 @@ function showLoginScreen()
   btnLogin.onClick = function()
     local name = editUsername.getText().toString()
     local pass = editPassword.getText().toString()
-    local customUrl = editServerUrl.getText().toString()
-    
-    if customUrl ~= "" then
-      BACKEND_URL = customUrl
-    end
+    local token = editGithubToken.getText().toString()
     
     if name == "" or pass == "" then
       announce("Error: Please enter both a username and password.")
       return
     end
     
-    announce("Connecting to server...")
-    local payload = encodeJSON({ username = name, password = pass })
+    currentUser.name = name
+    currentUser.githubToken = token
+    currentUser.online = true
     
-    Http.post(BACKEND_URL .. "/api/login", payload, function(code, content)
-      local res = decodeJSON(content)
-      if (code == 200 or code == 201) and res and res.success then
-        currentUser.name = name
-        currentUser.online = true
-        announce("Connected as " .. name .. ". Welcome to Homepage.")
-        showDashboardScreen()
-        startPollingLoop()
-      else
-        local errMsg = (res and res.message) or "Login failed. Check server connection."
-        announce("Error: " .. errMsg)
-      end
-    end)
+    announce("Connected as " .. name .. " via GitHub. Welcome to Homepage.")
+    showDashboardScreen()
+    startPollingLoop()
   end
 end
 
@@ -486,7 +546,7 @@ function showDashboardScreen()
   activeScreen = "dashboard"
   activity.setContentView(loadlayout(dashboardLayout))
   
-  txtLoggedAs.setText("Logged in as: " .. currentUser.name)
+  txtLoggedAs.setText("Logged in as: " .. currentUser.name .. " (GitHub Managed)")
   txtLoggedAs.setContentDescription("Logged in as " .. currentUser.name)
   
   btnOpenPublicFeed.onClick = function()
@@ -529,37 +589,41 @@ function showPublicFeedScreen()
       return
     end
     
-    local payload = encodeJSON({ sender = currentUser.name, text = text })
-    Http.post(BACKEND_URL .. "/api/public-feed", payload, function(code, content)
-      local res = decodeJSON(content)
-      if code == 200 and res and res.success then
-        editPublicMessageInput.setText("")
-        announce("Public message posted: " .. text)
+    -- Insert new message into local list and sync to GitHub
+    table.insert(publicFeedMessages, {
+      sender = currentUser.name,
+      text = text,
+      time = os.date("%I:%M %p")
+    })
+    
+    editPublicMessageInput.setText("")
+    updatePublicFeedUI()
+    announce("Public message posted: " .. text)
+    
+    -- Commit updated public_feed.json to GitHub repository
+    local jsonContent = encodeJSON(publicFeedMessages)
+    commitGitHubData("data/public_feed.json", jsonContent, "Post public message by " .. currentUser.name, function(success)
+      if success then
         fetchPublicFeedMessages()
-      else
-        announce("Failed to post message. Try again.")
       end
     end)
   end
 end
 
 function fetchPublicFeedMessages()
-  Http.get(BACKEND_URL .. "/api/public-feed", function(code, content)
-    if code == 200 then
-      local res = decodeJSON(content)
-      if res and res.messages then
-        local newCount = #res.messages
-        if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
-          local latest = res.messages[newCount]
-          if latest and latest.sender ~= currentUser.name then
-            announce("New public message from " .. latest.sender .. ": " .. latest.text)
-          end
+  fetchRawGitHubData("data/public_feed.json", function(success, data)
+    if success and data then
+      local newCount = #data
+      if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
+        local latest = data[newCount]
+        if latest and latest.sender ~= currentUser.name then
+          announce("New public message from " .. latest.sender .. ": " .. latest.text)
         end
-        lastPublicMessageCount = newCount
-        publicFeedMessages = res.messages
-        if activeScreen == "public_feed" then
-          updatePublicFeedUI()
-        end
+      end
+      lastPublicMessageCount = newCount
+      publicFeedMessages = data
+      if activeScreen == "public_feed" then
+        updatePublicFeedUI()
       end
     end
   end)
@@ -613,21 +677,29 @@ function showPrivateDirectoryScreen()
   fetchOnlineUsersList()
   
   btnRefreshUsers.onClick = function()
-    announce("Refreshing user directory...")
+    announce("Refreshing GitHub online users directory...")
     fetchOnlineUsersList()
   end
 end
 
 function fetchOnlineUsersList()
-  local url = BACKEND_URL .. "/api/online-users?user=" .. currentUser.name
-  Http.get(url, function(code, content)
-    if code == 200 then
-      local res = decodeJSON(content)
-      if res and res.users then
-        onlineUsersList = res.users
-        if activeScreen == "private_directory" then
-          updatePrivateDirectoryUI()
+  fetchRawGitHubData("data/online_users.json", function(success, data)
+    if success and data then
+      local filtered = {}
+      local now_ts = os.time()
+      for i, u in ipairs(data) do
+        if u.name ~= currentUser.name then
+          local last_seen = u.last_seen or 0
+          local is_online = (now_ts - last_seen) <= 120
+          table.insert(filtered, {
+            name = u.name,
+            status = is_online and "Online" or "Offline"
+          })
         end
+      end
+      onlineUsersList = filtered
+      if activeScreen == "private_directory" then
+        updatePrivateDirectoryUI()
       end
     end
   end)
@@ -657,10 +729,9 @@ function updatePrivateDirectoryUI()
   
   local data = {}
   for i, u in ipairs(onlineUsersList) do
-    local statusText = u.status or "Online"
     table.insert(data, { 
       itemName = u.name, 
-      itemStatus = "● " .. statusText 
+      itemStatus = "● " .. u.status 
     })
   end
   
@@ -695,17 +766,24 @@ function showPrivateChatScreen(targetUsername)
       return
     end
     
-    local payload = encodeJSON({ sender = currentUser.name, recipient = targetUsername, text = text })
-    Http.post(BACKEND_URL .. "/api/private-messages", payload, function(code, content)
-      local res = decodeJSON(content)
-      if code == 200 and res and res.success then
-        editMessageInput.setText("")
-        announce("Private message sent: " .. text)
-        fetchPrivateChatThread(targetUsername)
-      else
-        announce("Failed to send message. Try again.")
-      end
-    end)
+    if not privateChatHistory[targetUsername] then
+      privateChatHistory[targetUsername] = {}
+    end
+    
+    table.insert(privateChatHistory[targetUsername], {
+      sender = currentUser.name,
+      recipient = targetUsername,
+      text = text,
+      time = os.date("%I:%M %p")
+    })
+    
+    editMessageInput.setText("")
+    updatePrivateChatUI(targetUsername)
+    announce("Private message sent: " .. text)
+    
+    -- Sync private chat thread to GitHub
+    local threadFile = "data/chats/" .. currentUser.name .. "_" .. targetUsername .. ".json"
+    commitGitHubData(threadFile, encodeJSON(privateChatHistory[targetUsername]), "Private message to " .. targetUsername, function() end)
   end
   
   btnBackToPrivateList.onClick = function()
@@ -716,23 +794,20 @@ function showPrivateChatScreen(targetUsername)
 end
 
 function fetchPrivateChatThread(targetUsername)
-  local url = BACKEND_URL .. "/api/private-messages?user=" .. currentUser.name .. "&target=" .. targetUsername
-  Http.get(url, function(code, content)
-    if code == 200 then
-      local res = decodeJSON(content)
-      if res and res.messages then
-        local newCount = #res.messages
-        if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
-          local latest = res.messages[newCount]
-          if latest and latest.sender == targetUsername then
-            announce("New private message from " .. targetUsername .. ": " .. latest.text)
-          end
+  local threadFile = "data/chats/" .. currentUser.name .. "_" .. targetUsername .. ".json"
+  fetchRawGitHubData(threadFile, function(success, data)
+    if success and data then
+      local newCount = #data
+      if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
+        local latest = data[newCount]
+        if latest and latest.sender == targetUsername then
+          announce("New private message from " .. targetUsername .. ": " .. latest.text)
         end
-        lastPrivateMessageCount = newCount
-        privateChatHistory[targetUsername] = res.messages
-        if activeScreen == "private_chat" and activeChatTarget == targetUsername then
-          updatePrivateChatUI(targetUsername)
-        end
+      end
+      lastPrivateMessageCount = newCount
+      privateChatHistory[targetUsername] = data
+      if activeScreen == "private_chat" and activeChatTarget == targetUsername then
+        updatePrivateChatUI(targetUsername)
       end
     end
   end)
@@ -774,7 +849,7 @@ function updatePrivateChatUI(targetUsername)
 end
 
 -- --------------------------------------------------------------------
--- BACKGROUND AUTO-POLLING LOOP & HEARTBEAT
+-- BACKGROUND AUTO-POLLING LOOP & PRESENCE HEARTBEAT
 -- --------------------------------------------------------------------
 function startPollingLoop()
   if isPolling then return end
@@ -783,11 +858,7 @@ function startPollingLoop()
   local function poll()
     if not currentUser.online or not isPolling then return end
     
-    -- Send heartbeat to maintain online status
-    local payload = encodeJSON({ username = currentUser.name })
-    Http.post(BACKEND_URL .. "/api/heartbeat", payload, function() end)
-    
-    -- Refresh current screen content
+    -- Refresh active screen contents from GitHub
     if activeScreen == "public_feed" then
       fetchPublicFeedMessages()
     elseif activeScreen == "private_directory" then
@@ -796,8 +867,8 @@ function startPollingLoop()
       fetchPrivateChatThread(activeChatTarget)
     end
     
-    -- Schedule next pulse after 3 seconds
-    Handler().postDelayed(Runnable{ run = poll }, 3000)
+    -- Schedule next pulse after 4 seconds
+    Handler().postDelayed(Runnable{ run = poll }, 4000)
   end
   
   poll()
