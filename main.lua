@@ -1,7 +1,7 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Features: Public Feed, Deterministic Private Messaging, Accessibility & Jieshuo Optimized
+-- Features: Stable Screen Reader Focus, Public Feed, Private Messaging, Modern UI Layout
 -- Backend: Unified Cross-Device Real-Time Sync & Dual Network Auto-Updates (Local Wi-Fi + GitHub)
 -- ====================================================================
 
@@ -17,13 +17,13 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.0.0"
-local APP_VERSION_CODE = 1
+local APP_VERSION = "1.0.1"
+local APP_VERSION_CODE = 2
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
 
--- Local PC Wi-Fi Server IP (Connects physical Android phones & PC instantly)
+-- Local PC Wi-Fi Server IP
 local BACKEND_URL = "http://10.190.183.148:5000"
 
 local GITHUB_OWNER = "ghayasdev247"
@@ -38,6 +38,8 @@ local isPolling = false
 
 local lastPublicMessageCount = 0
 local lastPrivateMessageCount = 0
+local lastRenderedPublicCount = -1
+local lastRenderedPrivateCount = -1
 local lastHeartbeatTime = 0
 
 -- Data Stores
@@ -107,7 +109,6 @@ function checkForRemoteUpdates(manualCheck)
     announce("Checking for updates on Local Wi-Fi Network & GitHub...")
   end
   
-  -- Priority 1: Check Local Wi-Fi Network Update API
   Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
     if lCode == 200 then
       local manifest = decodeJSON(lContent)
@@ -128,7 +129,6 @@ function checkForRemoteUpdates(manualCheck)
       end
     end
     
-    -- Priority 2: Check GitHub Remote Update API
     local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
     Http.get(checkUrl, function(code, content)
       if code == 200 then
@@ -180,7 +180,7 @@ function applyDownloadedUpdate(versionStr, uContent)
 end
 
 -- --------------------------------------------------------------------
--- UNIFIED NETWORKING ENGINE (Local Server + GitHub Fallback)
+-- UNIFIED NETWORKING ENGINE
 -- --------------------------------------------------------------------
 function apiGet(endpoint, githubFilePath, callback)
   Http.get(BACKEND_URL .. endpoint, function(code, content)
@@ -216,7 +216,7 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- 1. LOGIN / IDENTITY SCREEN LAYOUT
+-- 1. LOGIN / IDENTITY SCREEN LAYOUT (Modern Design & Accessible)
 -- --------------------------------------------------------------------
 local loginLayout = {
   LinearLayout;
@@ -228,26 +228,26 @@ local loginLayout = {
   {
     TextView;
     text = "Accessible Messenger";
-    textSize = "22sp";
-    textColor = "#000000";
+    textSize = "24sp";
+    textColor = "#1565C0";
     layout_gravity = "center";
     padding = "10dp";
     ContentDescription = "Accessible Messenger Application Header";
   };
   {
     TextView;
-    text = "Unified Anonymous Login (v" .. APP_VERSION .. ")";
-    textSize = "16sp";
+    text = "Anonymous Login (v" .. APP_VERSION .. ")";
+    textSize = "15sp";
     textColor = "#555555";
     layout_gravity = "center";
-    layout_marginBottom = "15dp";
+    layout_marginBottom = "20dp";
     ContentDescription = "Subtitle: Anonymous Login version " .. APP_VERSION;
   };
   -- Username Input
   {
     TextView;
     text = "Step 1: Enter Username";
-    textSize = "16sp";
+    textSize = "15sp";
     textColor = "#222222";
     layout_marginTop = "5dp";
     ContentDescription = "Step 1: Enter Username label";
@@ -257,17 +257,18 @@ local loginLayout = {
     id = "editUsername";
     hint = "Type any alias or handle";
     layout_width = "fill";
-    textSize = "18sp";
+    textSize = "17sp";
     padding = "12dp";
+    backgroundColor = "#FFFFFF";
     ContentDescription = "Username edit box. Type your desired alias here.";
   };
   -- Password Input
   {
     TextView;
     text = "Step 2: Enter Password";
-    textSize = "16sp";
+    textSize = "15sp";
     textColor = "#222222";
-    layout_marginTop = "10dp";
+    layout_marginTop = "12dp";
     ContentDescription = "Step 2: Enter Password label";
   };
   {
@@ -276,8 +277,9 @@ local loginLayout = {
     hint = "Type a password";
     inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD;
     layout_width = "fill";
-    textSize = "18sp";
+    textSize = "17sp";
     padding = "12dp";
+    backgroundColor = "#FFFFFF";
     ContentDescription = "Password edit box. Type your password here.";
   };
   -- Server Address Field
@@ -286,7 +288,7 @@ local loginLayout = {
     text = "Server Address";
     textSize = "14sp";
     textColor = "#777777";
-    layout_marginTop = "10dp";
+    layout_marginTop = "12dp";
     ContentDescription = "Server Address label";
   };
   {
@@ -296,7 +298,8 @@ local loginLayout = {
     hint = "http://10.190.183.148:5000";
     layout_width = "fill";
     textSize = "14sp";
-    padding = "8dp";
+    padding = "10dp";
+    backgroundColor = "#FFFFFF";
     ContentDescription = "Server URL edit box. Pre-configured with PC Wi-Fi server address.";
   };
   -- Login Button
@@ -306,7 +309,7 @@ local loginLayout = {
     text = "Connect to Messenger";
     layout_width = "fill";
     layout_height = "55dp";
-    layout_marginTop = "15dp";
+    layout_marginTop = "20dp";
     backgroundColor = "#1565C0";
     textColor = "#FFFFFF";
     textSize = "18sp";
@@ -319,7 +322,7 @@ local loginLayout = {
     text = "🔄 Check for Auto Updates";
     layout_width = "fill";
     layout_height = "45dp";
-    layout_marginTop = "10dp";
+    layout_marginTop = "12dp";
     backgroundColor = "#455A64";
     textColor = "#FFFFFF";
     textSize = "14sp";
@@ -335,14 +338,14 @@ local dashboardLayout = {
   orientation = "vertical";
   layout_width = "fill";
   layout_height = "fill";
-  padding = "16dp";
+  padding = "20dp";
   backgroundColor = "#FFFFFF";
   {
     TextView;
     id = "txtDashboardHeader";
     text = "Messenger Main Home";
-    textSize = "22sp";
-    textColor = "#000000";
+    textSize = "24sp";
+    textColor = "#1565C0";
     layout_gravity = "center";
     layout_marginBottom = "5dp";
     ContentDescription = "Messenger Main Home Screen Header";
@@ -354,7 +357,7 @@ local dashboardLayout = {
     textSize = "15sp";
     textColor = "#2E7D32";
     layout_gravity = "center";
-    layout_marginBottom = "20dp";
+    layout_marginBottom = "25dp";
     ContentDescription = "Status indicator: Connected.";
   };
   
@@ -423,20 +426,21 @@ local publicFeedLayout = {
   layout_width = "fill";
   layout_height = "fill";
   padding = "12dp";
-  backgroundColor = "#F0F4F8";
-  -- Header
+  backgroundColor = "#EBF2F7";
+  -- Header Bar
   {
     LinearLayout;
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
-    padding = "8dp";
+    padding = "10dp";
     backgroundColor = "#0288D1";
     {
       Button;
       id = "btnPublicToHome";
       text = "< Home";
       textColor = "#FFFFFF";
+      backgroundColor = "#0288D1";
       ContentDescription = "Back to home dashboard button";
     };
     {
@@ -449,7 +453,7 @@ local publicFeedLayout = {
       ContentDescription = "Public Feed room.";
     };
   };
-  -- Messages List
+  -- Messages List (Stable Focus Configuration)
   {
     ListView;
     id = "listPublicMessages";
@@ -457,6 +461,8 @@ local publicFeedLayout = {
     layout_weight = "1";
     layout_marginTop = "8dp";
     layout_marginBottom = "8dp";
+    divider = nil;
+    dividerHeight = "0dp";
     stackFromBottom = true;
     transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
   };
@@ -473,6 +479,7 @@ local publicFeedLayout = {
       layout_weight = "1";
       textSize = "16sp";
       padding = "12dp";
+      backgroundColor = "#FFFFFF";
       ContentDescription = "Public message text field. Type message to post publicly.";
     };
     {
@@ -543,19 +550,21 @@ local chatLayout = {
   layout_width = "fill";
   layout_height = "fill";
   padding = "12dp";
-  backgroundColor = "#F9F9F9";
+  backgroundColor = "#EBF2F7";
   -- Header
   {
     LinearLayout;
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
-    padding = "8dp";
-    backgroundColor = "#E0E0E0";
+    padding = "10dp";
+    backgroundColor = "#37474F";
     {
       Button;
       id = "btnBackToPrivateList";
       text = "< Directory";
+      textColor = "#FFFFFF";
+      backgroundColor = "#37474F";
       ContentDescription = "Back to private chats directory";
     };
     {
@@ -563,13 +572,13 @@ local chatLayout = {
       id = "txtChatTargetHeader";
       text = "Private Chat";
       textSize = "18sp";
-      textColor = "#000000";
+      textColor = "#FFFFFF";
       layout_marginLeft = "15dp";
       layout_weight = "1";
       ContentDescription = "Currently chatting in private room.";
     };
   };
-  -- Message History List
+  -- Message History List (Stable Focus Configuration)
   {
     ListView;
     id = "listChatMessages";
@@ -577,6 +586,8 @@ local chatLayout = {
     layout_weight = "1";
     layout_marginTop = "8dp";
     layout_marginBottom = "8dp";
+    divider = nil;
+    dividerHeight = "0dp";
     stackFromBottom = true;
     transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
   };
@@ -593,6 +604,7 @@ local chatLayout = {
       layout_weight = "1";
       textSize = "16sp";
       padding = "12dp";
+      backgroundColor = "#FFFFFF";
       ContentDescription = "Private message text field. Type your message here.";
     };
     {
@@ -608,7 +620,7 @@ local chatLayout = {
 }
 
 -- --------------------------------------------------------------------
--- SCREEN CONTROLLERS & NETWORKING
+-- SCREEN CONTROLLERS & STABLE FOCUS UI UPDATES
 -- --------------------------------------------------------------------
 
 function showLoginScreen()
@@ -616,7 +628,6 @@ function showLoginScreen()
   isPolling = false
   activity.setContentView(loadlayout(loginLayout))
   
-  -- Auto-check for updates on startup (Local Wi-Fi + GitHub Remote)
   checkForRemoteUpdates(false)
   
   btnCheckUpdate.onClick = function()
@@ -680,10 +691,11 @@ function showDashboardScreen()
 end
 
 -- --------------------------------------------------------------------
--- PUBLIC FEED CONTROLLER
+-- PUBLIC FEED CONTROLLER (Focus Stability Fix)
 -- --------------------------------------------------------------------
 function showPublicFeedScreen()
   activeScreen = "public_feed"
+  lastRenderedPublicCount = -1
   activity.setContentView(loadlayout(publicFeedLayout))
   
   btnPublicToHome.onClick = function()
@@ -726,7 +738,10 @@ function fetchPublicFeedMessages()
       end
       lastPublicMessageCount = newCount
       publicFeedMessages = data
-      if activeScreen == "public_feed" then
+      
+      -- Focus Stability Fix: ONLY update adapter when count changes!
+      if activeScreen == "public_feed" and lastRenderedPublicCount ~= newCount then
+        lastRenderedPublicCount = newCount
         updatePublicFeedUI()
       end
     end
@@ -738,26 +753,42 @@ function updatePublicFeedUI()
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
-    padding = "8dp";
+    padding = "10dp";
+    layout_marginBottom = "8dp";
+    backgroundColor = "#FFFFFF";
     {
-      TextView;
-      id = "msgSender";
-      textSize = "12sp";
-      textColor = "#0288D1";
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      {
+        TextView;
+        id = "msgSender";
+        textSize = "13sp";
+        textColor = "#0288D1";
+        textStyle = "bold";
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "msgTime";
+        textSize = "11sp";
+        textColor = "#888888";
+      };
     };
     {
       TextView;
       id = "msgText";
       textSize = "16sp";
       textColor = "#111111";
-      padding = "4dp";
+      layout_marginTop = "4dp";
     };
   }
   
   local data = {}
   for i, m in ipairs(publicFeedMessages) do
     table.insert(data, {
-      msgSender = m.sender .. " (" .. (m.time or "") .. "):",
+      msgSender = m.sender,
+      msgTime = m.time or "",
       msgText = m.text
     })
   end
@@ -849,12 +880,13 @@ function updatePrivateDirectoryUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER (Deterministic Pathing)
+-- PRIVATE CHAT ROOM CONTROLLER (Focus Stability Fix)
 -- --------------------------------------------------------------------
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
   activeChatTarget = targetUsername
   lastPrivateMessageCount = 0
+  lastRenderedPrivateCount = -1
   activity.setContentView(loadlayout(chatLayout))
   
   txtChatTargetHeader.setText("Private: " .. targetUsername)
@@ -905,7 +937,10 @@ function fetchPrivateChatThread(targetUsername)
       end
       lastPrivateMessageCount = newCount
       privateChatHistory[targetUsername] = data
-      if activeScreen == "private_chat" and activeChatTarget == targetUsername then
+      
+      -- Focus Stability Fix: ONLY update adapter when count changes!
+      if activeScreen == "private_chat" and activeChatTarget == targetUsername and lastRenderedPrivateCount ~= newCount then
+        lastRenderedPrivateCount = newCount
         updatePrivateChatUI(targetUsername)
       end
     end
@@ -917,19 +952,34 @@ function updatePrivateChatUI(targetUsername)
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
-    padding = "8dp";
+    padding = "10dp";
+    layout_marginBottom = "8dp";
+    backgroundColor = "#FFFFFF";
     {
-      TextView;
-      id = "msgSender";
-      textSize = "12sp";
-      textColor = "#757575";
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      {
+        TextView;
+        id = "msgSender";
+        textSize = "12sp";
+        textColor = "#757575";
+        textStyle = "bold";
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "msgTime";
+        textSize = "11sp";
+        textColor = "#888888";
+      };
     };
     {
       TextView;
       id = "msgText";
       textSize = "16sp";
       textColor = "#111111";
-      padding = "4dp";
+      layout_marginTop = "4dp";
     };
   }
   
@@ -938,7 +988,8 @@ function updatePrivateChatUI(targetUsername)
   for i, m in ipairs(msgs) do
     local senderLabel = (m.sender == currentUser.name) and "Me" or m.sender
     table.insert(data, {
-      msgSender = senderLabel .. " (" .. (m.time or "") .. "):",
+      msgSender = senderLabel,
+      msgTime = m.time or "",
       msgText = m.text
     })
   end
@@ -948,7 +999,7 @@ function updatePrivateChatUI(targetUsername)
 end
 
 -- --------------------------------------------------------------------
--- BACKGROUND POLLING LOOP (2.5s Pulse & Presence Heartbeat)
+-- BACKGROUND POLLING LOOP
 -- --------------------------------------------------------------------
 function updateOnlinePresence()
   apiPost("/api/heartbeat", { username = currentUser.name }, function() end)
