@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.5.0 (Build Code: 18)
--- Features: Strict Cloud Auto-Purge on Exit/Disconnect, Active Presence Auto-Cleaner,
---           Android Voice Note Download & Auto-Play Engine
+-- Version: 1.6.0 (Build Code: 19)
+-- Features: AAC HD Voice Recording, Android SDK Native Base64 Audio Engine,
+--           Cached Playback, Ephemeral Audio Storage Purge & Cloud Auto-Cleanup
 -- ====================================================================
 
 require "import"
@@ -14,12 +14,16 @@ import "android.view.*"
 import "android.graphics.*"
 import "android.text.InputType"
 import "android.content.Context"
+import "android.util.Base64"
+import "java.io.File"
+import "java.io.FileInputStream"
+import "java.io.FileOutputStream"
 
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.5.0"
-local APP_VERSION_CODE = 18
+local APP_VERSION = "1.6.0"
+local APP_VERSION_CODE = 19
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -70,7 +74,7 @@ function getChatFilePath(u1, u2)
 end
 
 -- --------------------------------------------------------------------
--- JSON & BASE64 UTILITIES
+-- JSON & NATIVE ANDROID BASE64 UTILITIES (100% Binary Safe)
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -114,36 +118,35 @@ function encodeJSON(val)
   end
 end
 
-local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-function base64Encode(data)
-  if not data or data == "" then return "" end
-  return ((data:gsub('.', function(x) 
-    local r,b='',x:byte()
-    for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-    return r
-  end)..'0000'):gsub('%d%d%d?%d?%d?', function(x)
-    if (#x < 6) then return '' end
-    local c=0
-    for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-    return b64chars:sub(c+1,c+1)
-  end)..({ '', '==', '=' })[#data%3+1])
+function encodeAudioFileToBase64(filePath)
+  local b64Result = ""
+  pcall(function()
+    local f = File(filePath)
+    if f.exists() and f.length() > 0 then
+      local size = f.length()
+      local bytes = byte[size]
+      local fis = FileInputStream(f)
+      fis.read(bytes)
+      fis.close()
+      b64Result = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    end
+  end)
+  return b64Result
 end
 
-function base64Decode(data)
-  if not data or data == "" then return "" end
-  data = string.gsub(data, '[^'..b64chars..'=]', '')
-  return (data:gsub('=', ''):gsub('.', function(x)
-    if (x == '=') then return '' end
-    local r,f='',(b64chars:find(x)-1)
-    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
-    return r
-  end):gsub('%d%d%d?%d?%d?', function(x)
-    if (#x ~= 8) then return '' end
-    local c=0
-    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
-    return string.char(c)
-  end))
+function decodeBase64ToAudioFile(b64Data, targetPath)
+  local success = false
+  pcall(function()
+    local cleanB64 = b64Data:gsub("^data:audio/[%w%+]+;base64,", "")
+    local bytes = Base64.decode(cleanB64, Base64.DEFAULT)
+    if bytes and #bytes > 0 then
+      local fos = FileOutputStream(File(targetPath))
+      fos.write(bytes)
+      fos.close()
+      success = true
+    end
+  end)
+  return success
 end
 
 function announce(text)
@@ -154,13 +157,28 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- CLOUD AUTO-PURGE ENGINE (Server Cleanup on Exit / Logout)
+-- EPHEMERAL STORAGE CLEANUP ENGINE (Purge Audio Files from Device)
 -- --------------------------------------------------------------------
+function purgeEphemeralAudioFiles()
+  pcall(function()
+    import "android.os.Environment"
+    local baseDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
+    local voiceFolder = baseDownload .. "/Accessible_Messenger_Voice"
+    local folder = File(voiceFolder)
+    if folder.exists() and folder.isDirectory() then
+      local files = folder.listFiles()
+      if files then
+        for i = 0, #files - 1 do
+          files[i].delete()
+        end
+      end
+    end
+  end)
+end
+
 function purgeCloudFeed(path)
   local fbPath = path:gsub("%.json$", "")
   local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json"
-  
-  -- Send HTTP PUT with empty array b'[]' to purge server data
   Http.post(fbUrl, "[]", function(code, content) end)
   commitGitHubFile(path, {}, "Purged ephemeral feed", function() end)
 end
@@ -177,7 +195,6 @@ function saveChatLocally(chatType, targetName, messagesList)
   end)
   
   pcall(function()
-    local File = luajava.bindClass("java.io.File")
     local folder = File(downloadDir)
     if not folder.exists() then folder.mkdirs() end
   end)
@@ -242,7 +259,7 @@ function fetchGitHubFile(filePath, callback)
     if code == 200 then
       local resp = decodeJSON(content)
       if resp and resp.content then
-        local rawData = base64Decode(resp.content:gsub("\n", ""))
+        local rawData = Base64.decode(resp.content:gsub("%s+", ""), Base64.DEFAULT)
         callback(true, decodeJSON(rawData), resp.sha)
       else
         callback(false, nil, nil)
@@ -268,7 +285,7 @@ function commitGitHubFile(filePath, newTableData, commitMessage, callback)
   fetchGitHubFile(filePath, function(ok, currentData, sha)
     local payload = {
       message = commitMessage,
-      content = base64Encode(encodeJSON(newTableData)),
+      content = Base64.encodeToString(encodeJSON(newTableData), Base64.NO_WRAP),
       branch = GITHUB_BRANCH
     }
     if sha then payload.sha = sha end
@@ -510,11 +527,10 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- ANDROID VOICE NOTE DOWNLOAD & AUTO-PLAYBACK ENGINE (Base64 -> Storage)
+-- ANDROID AAC HD VOICE RECORDING & CACHED PLAYBACK ENGINE
 -- --------------------------------------------------------------------
 function downloadAndPlayVoiceNote(msgItem)
   import "android.media.MediaPlayer"
-  import "android.widget.Toast"
   
   if not msgItem then return end
   local audioData = msgItem.audio or msgItem.voicePath
@@ -524,8 +540,6 @@ function downloadAndPlayVoiceNote(msgItem)
     return
   end
   
-  announce("Downloading voice note...")
-  
   local voiceFolder = "/sdcard/Download/Accessible_Messenger_Voice"
   pcall(function()
     import "android.os.Environment"
@@ -534,40 +548,42 @@ function downloadAndPlayVoiceNote(msgItem)
   end)
   
   pcall(function()
-    local File = luajava.bindClass("java.io.File")
     local folder = File(voiceFolder)
     if not folder.exists() then folder.mkdirs() end
   end)
   
-  local targetAudioFile = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
+  -- Create a unique file name based on string length & sender time to reuse cache
+  local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", "")
+  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
   local isFileReady = false
   
+  -- 1. Check if file already exists in local storage cache (DO NOT RE-DOWNLOAD!)
   pcall(function()
-    local File = luajava.bindClass("java.io.File")
-    local fObj = File(audioData)
+    local fObj = File(targetAudioFile)
     if fObj.exists() and fObj.length() > 0 then
-      targetAudioFile = audioData
       isFileReady = true
     end
   end)
-  
+
+  -- Check if audioData itself is an existing local file
   if not isFileReady then
     pcall(function()
-      local cleanB64 = audioData:gsub("^data:audio/[%w%+]+;base64,", "")
-      local decodedBytes = base64Decode(cleanB64)
-      if decodedBytes and #decodedBytes > 0 then
-        local f = io.open(targetAudioFile, "wb")
-        if f then
-          f:write(decodedBytes)
-          f:close()
-          isFileReady = true
-        end
+      local fObj = File(audioData)
+      if fObj.exists() and fObj.length() > 0 then
+        targetAudioFile = audioData
+        isFileReady = true
       end
     end)
   end
   
+  -- 2. Decode from Base64 using Native Android SDK if not cached
+  if not isFileReady then
+    announce("Downloading voice note...")
+    isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
+  end
+  
   if isFileReady then
-    announce("Voice note downloaded. Playing audio now...")
+    announce("Playing voice note...")
     pcall(function()
       local mp = MediaPlayer()
       mp.reset()
@@ -577,13 +593,13 @@ function downloadAndPlayVoiceNote(msgItem)
       
       mp.setOnCompletionListener(MediaPlayer.OnCompletionListener{
         onCompletion = function(player)
-          announce("Voice note playback finished.")
+          announce("Voice note finished playing.")
           player.release()
         end
       })
     end)
   else
-    announce("Failed to download voice note audio file.")
+    announce("Failed to decode or play voice note audio.")
   end
 end
 
@@ -597,11 +613,15 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
       if action == MotionEvent.ACTION_DOWN then
         pcall(function()
           local downloadDir = "/sdcard/Download"
-          voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".3gp"
+          voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".m4a"
+          
+          -- AAC MPEG_4 HD Voice Recording Engine (100% Android Sound Guaranteed)
           mediaRecorder = MediaRecorder()
           mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-          mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-          mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+          mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+          mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+          mediaRecorder.setAudioSamplingRate(44100)
+          mediaRecorder.setAudioEncodingBitRate(96000)
           mediaRecorder.setOutputFile(voiceRecordPath)
           mediaRecorder.prepare()
           mediaRecorder.start()
@@ -619,13 +639,8 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
             end
             isRecordingVoice = false
             
-            local b64Audio = ""
-            local f = io.open(voiceRecordPath, "rb")
-            if f then
-              local bytes = f:read("*a")
-              f:close()
-              b64Audio = base64Encode(bytes)
-            end
+            -- Encode binary AAC audio safely using Android SDK Base64
+            local b64Audio = encodeAudioFileToBase64(voiceRecordPath)
             
             local msgObj = {
               sender = currentUser.name,
@@ -1178,8 +1193,8 @@ function showDashboardScreen()
   end
   
   btnLogout.onClick = function()
-    -- Strict Server Auto-Purge: Wipe presence and reset local memory on logout
-    postFirebaseData("data/online_users", {}, function() end)
+    purgeCloudFeed("data/online_users.json")
+    purgeEphemeralAudioFiles()
     currentUser.name = ""
     currentUser.online = false
     isPolling = false
@@ -1199,8 +1214,8 @@ function showPublicFeedScreen()
   activity.setContentView(loadlayout(publicFeedLayout))
   
   btnPublicToHome.onClick = function()
-    -- Strict Server Auto-Purge: Wipe unsaved public messages from cloud when leaving
     purgeCloudFeed("data/public_feed.json")
+    purgeEphemeralAudioFiles()
     publicFeedMessages = {}
     announce("Returning to Home Dashboard")
     showDashboardScreen()
@@ -1257,7 +1272,6 @@ function fetchPublicFeedMessages()
 end
 
 function updatePublicFeedUI()
-  -- Jieshuo Max 100% Safe Card UI (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -1311,7 +1325,7 @@ function updatePublicFeedUI()
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listPublicMessages.setAdapter(adapter)
   
-  -- SINGLE TAP: Immediate Voice Download & Auto Playback
+  -- SINGLE TAP: Immediate Voice Download & Auto Playback (Checks Cache First)
   listPublicMessages.onItemClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = publicFeedMessages[idx]
@@ -1324,7 +1338,7 @@ function updatePublicFeedUI()
     end
   end
   
-  -- LONG PRESS ONLY: Open Context Options Modal (React, Reply, Pin, Delete)
+  -- LONG PRESS ONLY: Open Context Options Modal
   listPublicMessages.onItemLongClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = publicFeedMessages[idx]
@@ -1366,7 +1380,6 @@ function fetchOnlineUsersList()
           local lastSeen = tonumber(u.last_seen or 0) or 0
           local isOnline = (now_ts - lastSeen <= 60) and (u.status == "Online" or u.online == true)
           
-          -- STRICT FILTER: Show ONLY currently active online users (Hide offline users)
           if name and name ~= currentUser.name and isOnline then
             table.insert(filtered, {
               name = name,
@@ -1471,9 +1484,9 @@ function showPrivateChatScreen(targetUsername)
   end
   
   btnBackToPrivateList.onClick = function()
-    -- Strict Server Auto-Purge: Wipe unsaved private messages from cloud when leaving
     local chatPath = getChatFilePath(currentUser.name, targetUsername)
     purgeCloudFeed(chatPath)
+    purgeEphemeralAudioFiles()
     privateChatHistory[targetUsername] = nil
     activeChatTarget = ""
     announce("Returning to active online users directory")
@@ -1506,7 +1519,6 @@ function fetchPrivateChatThread(targetUsername)
 end
 
 function updatePrivateChatUI(targetUsername)
-  -- Jieshuo Max 100% Safe Card UI (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -1562,7 +1574,7 @@ function updatePrivateChatUI(targetUsername)
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listChatMessages.setAdapter(adapter)
   
-  -- SINGLE TAP: Immediate Voice Download & Auto Playback
+  -- SINGLE TAP: Immediate Voice Download & Auto Playback (Checks Cache First)
   listChatMessages.onItemClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = msgs[idx]
@@ -1575,7 +1587,7 @@ function updatePrivateChatUI(targetUsername)
     end
   end
   
-  -- LONG PRESS ONLY: Open Context Options Modal (React, Reply, Pin, Delete)
+  -- LONG PRESS ONLY: Open Context Options Modal
   listChatMessages.onItemLongClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = msgs[idx]
