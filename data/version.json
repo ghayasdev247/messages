@@ -1,7 +1,7 @@
 {
-  "version": "1.2.0",
-  "version_code": 15,
+  "version": "1.3.0",
+  "version_code": 16,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 1.2.0: Added Voice Notes, Emoji Reactions, Replying, Pinning, Online-Only User Filtering, and Local Chat Exporter."
+  "changelog": "Version 1.3.0: WhatsApp Hold-to-Record Voice Button, Single-Tap Voice Playback, Long-Press Menu, and Strict Ephemeral Storage."
 }

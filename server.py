@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.2.0",
-                "version_code": 15,
+                "version": "1.3.0",
+                "version_code": 16,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.2.0: Added Voice Notes, Emoji Reactions, Replying, Pinning, Online-Only User Filtering, and Local Chat Exporter."
+                "changelog": "Version 1.3.0: WhatsApp Hold-to-Record Voice Button, Single-Tap Voice Playback, Long-Press Menu, and Strict Ephemeral Storage."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

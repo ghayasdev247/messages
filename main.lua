@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.2.0 (Build Code: 15)
--- Features: Voice Notes, Emoji Reactions, Replying, Pinning, Local Chat Exporter
--- Networking: Firebase Realtime Database + GitHub Serverless + Local PC Server
+-- Version: 1.3.0 (Build Code: 16)
+-- Features: WhatsApp Hold-to-Record Voice Button, Single-Tap Audio Playback,
+--           Long-Press Context Menu, Ephemeral Storage & Firebase Sync
 -- ====================================================================
 
 require "import"
@@ -18,8 +18,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.2.0"
-local APP_VERSION_CODE = 15
+local APP_VERSION = "1.3.0"
+local APP_VERSION_CODE = 16
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -51,7 +51,7 @@ local mediaRecorder = nil
 local isRecordingVoice = false
 local voiceRecordPath = ""
 
--- Data Stores
+-- Data Stores (Strictly Ephemeral by Default)
 local publicFeedMessages = {}
 local onlineUsersList = {}
 local privateChatHistory = {}
@@ -270,7 +270,7 @@ function commitGitHubFile(filePath, newTableData, commitMessage, callback)
 end
 
 -- --------------------------------------------------------------------
--- STORAGE & REMOTE UPDATE ENGINE (Saved to Mobile Downloads folder)
+-- STORAGE & REMOTE UPDATE ENGINE
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
@@ -357,7 +357,7 @@ function saveUpdateFile(versionStr, uContent)
 end
 
 -- --------------------------------------------------------------------
--- UNIFIED NETWORKING ENGINE (Bulletproof Firebase Parsing + Fallback)
+-- UNIFIED NETWORKING ENGINE
 -- --------------------------------------------------------------------
 function fetchFirebaseData(path, callback)
   local fbPath = path:gsub("%.json$", "")
@@ -404,14 +404,12 @@ function postFirebaseData(path, payload, callback)
 end
 
 function apiGet(endpoint, githubFilePath, callback)
-  -- Priority 1: Firebase Realtime Database (messages-server-f2a99)
   fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
     if fbSuccess and fbData and type(fbData) == "table" and #fbData > 0 then
       callback(true, fbData)
       return
     end
     
-    -- Priority 2: Local PC Server
     Http.get(BACKEND_URL .. endpoint, function(code, content)
       if code == 200 then
         local res = decodeJSON(content)
@@ -421,7 +419,6 @@ function apiGet(endpoint, githubFilePath, callback)
         end
       end
       
-      -- Priority 3: GitHub REST API Fallback
       fetchGitHubFile(githubFilePath, function(success, data)
         callback(success, data)
       end)
@@ -433,21 +430,16 @@ function apiPost(endpoint, payload, callback)
   local payloadStr = encodeJSON(payload)
   local headers = { ["Content-Type"] = "application/json" }
 
-  -- Multi-Sync to Primary Firebase Realtime Database + GitHub + Local PC
   if string.find(endpoint, "/api/public%-feed") then
     local msgObj = {
       sender = payload.sender or currentUser.name,
       text = payload.text,
+      isVoice = payload.isVoice,
+      audio = payload.audio,
       time = payload.time or os.date("%I:%M %p")
     }
-    
-    -- Post to Primary Firebase Realtime Database
     postFirebaseData("data/public_feed", msgObj, function(fbOk) end)
-    
-    -- Post to Local PC Server
     Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-    
-    -- Commit to GitHub
     fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
       local feedToSave = currentFeed or {}
       table.insert(feedToSave, msgObj)
@@ -459,17 +451,13 @@ function apiPost(endpoint, payload, callback)
       sender = payload.sender or currentUser.name,
       recipient = payload.recipient,
       text = payload.text,
+      isVoice = payload.isVoice,
+      audio = payload.audio,
       time = payload.time or os.date("%I:%M %p")
     }
     local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-    
-    -- Post to Primary Firebase Realtime Database
     postFirebaseData(filePath, msgObj, function(fbOk) end)
-    
-    -- Post to Local PC Server
     Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-    
-    -- Commit to GitHub
     fetchGitHubFile(filePath, function(ok, currentThread)
       local threadToSave = currentThread or {}
       table.insert(threadToSave, msgObj)
@@ -481,14 +469,8 @@ function apiPost(endpoint, payload, callback)
     if username and username ~= "" then
       local now_ts = os.time()
       local userObj = { name = username, last_seen = now_ts, status = "Online" }
-      
-      -- Put to Primary Firebase Realtime Database
       postFirebaseData("data/online_users", userObj, function() end)
-      
-      -- Post to Local PC Server
       Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-      
-      -- Commit to GitHub
       fetchGitHubFile("data/online_users.json", function(ok, userList)
         local list = userList or {}
         local found = false
@@ -514,81 +496,114 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- VOICE NOTE ENGINE (RECORDING & PLAYBACK)
+-- VOICE NOTE ENGINE & AUDIO PLAYBACK (Single Tap & Base64 Decoder)
 -- --------------------------------------------------------------------
-function toggleVoiceRecording(isPublic, targetName)
-  import "android.media.MediaRecorder"
-  
-  if not isRecordingVoice then
-    pcall(function()
-      local downloadDir = "/sdcard/Download"
-      voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".3gp"
-      mediaRecorder = MediaRecorder()
-      mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-      mediaRecorder.setOutputFile(voiceRecordPath)
-      mediaRecorder.prepare()
-      mediaRecorder.start()
-      isRecordingVoice = true
-      announce("Voice recording started. Tap button again to stop and send.")
-    end)
-  else
-    pcall(function()
-      if mediaRecorder then
-        mediaRecorder.stop()
-        mediaRecorder.release()
-        mediaRecorder = nil
-      end
-      isRecordingVoice = false
-      
-      local msgText = "🎤 Voice Message 🔊 (Double tap options to play)"
-      local payload = {
-        sender = currentUser.name,
-        recipient = targetName,
-        text = msgText,
-        isVoice = true,
-        voicePath = voiceRecordPath
-      }
-      
-      if isPublic then
-        apiPost("/api/public-feed", payload, function() fetchPublicFeedMessages() end)
-      else
-        apiPost("/api/private-messages", payload, function() fetchPrivateChatThread(targetName) end)
-      end
-      announce("Voice message sent!")
-    end)
-  end
-end
-
-function playVoiceNote(filePath)
+function playVoiceNote(audioSource)
   import "android.media.MediaPlayer"
+  if not audioSource or audioSource == "" then
+    announce("No voice audio file found.")
+    return
+  end
+  
   pcall(function()
+    local playPath = audioSource
+    -- Handle Base64 encoded audio strings or data URIs
+    if string.sub(audioSource, 1, 5) == "data:" or string.len(audioSource) > 200 then
+      local cleanB64 = audioSource:gsub("^data:audio/[%w%+]+;base64,", "")
+      local decoded = base64Decode(cleanB64)
+      playPath = activity.getCacheDir().getAbsolutePath() .. "/temp_voice_play.3gp"
+      local f = io.open(playPath, "wb")
+      if f then
+        f:write(decoded)
+        f:close()
+      end
+    end
+    
     local mp = MediaPlayer()
-    mp.setDataSource(filePath)
+    mp.setDataSource(playPath)
     mp.prepare()
     mp.start()
     announce("Playing voice note...")
   end)
 end
 
+function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
+  import "android.view.MotionEvent"
+  import "android.media.MediaRecorder"
+  
+  btnWidget.setOnTouchListener(View.OnTouchListener{
+    onTouch = function(view, event)
+      local action = event.getAction()
+      if action == MotionEvent.ACTION_DOWN then
+        pcall(function()
+          local downloadDir = "/sdcard/Download"
+          voiceRecordPath = downloadDir .. "/voice_" .. os.time() .. ".3gp"
+          mediaRecorder = MediaRecorder()
+          mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+          mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+          mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+          mediaRecorder.setOutputFile(voiceRecordPath)
+          mediaRecorder.prepare()
+          mediaRecorder.start()
+          isRecordingVoice = true
+          announce("Recording voice note. Release button to send.")
+        end)
+        return true
+      elseif action == MotionEvent.ACTION_UP or action == MotionEvent.ACTION_CANCEL then
+        if isRecordingVoice then
+          pcall(function()
+            if mediaRecorder then
+              mediaRecorder.stop()
+              mediaRecorder.release()
+              mediaRecorder = nil
+            end
+            isRecordingVoice = false
+            
+            local b64Audio = ""
+            local f = io.open(voiceRecordPath, "rb")
+            if f then
+              local bytes = f:read("*a")
+              f:close()
+              b64Audio = base64Encode(bytes)
+            end
+            
+            local msgObj = {
+              sender = currentUser.name,
+              recipient = targetName,
+              text = "🎤 Voice Message 🔊",
+              isVoice = true,
+              audio = b64Audio,
+              voicePath = voiceRecordPath,
+              time = os.date("%I:%M %p")
+            }
+            
+            if isPublic then
+              apiPost("/api/public-feed", msgObj, function() fetchPublicFeedMessages() end)
+            else
+              apiPost("/api/private-messages", msgObj, function() fetchPrivateChatThread(targetName) end)
+            end
+            announce("Voice message sent!")
+          end)
+        end
+        return true
+      end
+      return false
+    end
+  })
+end
+
 -- --------------------------------------------------------------------
--- MESSAGE OPTIONS MODAL (REACT, REPLY, PIN, DELETE)
+-- LONG-PRESS-ONLY MESSAGE OPTIONS MODAL
 -- --------------------------------------------------------------------
 function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
   local options = { "❤️ React with Emoji", "↩️ Reply to Message", "📌 Pin Message", "🗑️ Delete Message" }
-  if msgItem.isVoice and msgItem.voicePath then
-    table.insert(options, 1, "▶️ Play Voice Note")
-  end
 
   local builder = AlertDialog.Builder(activity)
   builder.setTitle("Message Options")
   builder.setItems(options, function(dialog, which)
     local selectedOption = options[which + 1]
     
-    if string.find(selectedOption, "Play Voice Note") then
-      playVoiceNote(msgItem.voicePath)
-    elseif string.find(selectedOption, "React") then
+    if string.find(selectedOption, "React") then
       showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
     elseif string.find(selectedOption, "Reply") then
       local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", msgItem.text or "")
@@ -810,7 +825,7 @@ local dashboardLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 3. PUBLIC FEED SCREEN LAYOUT (WITH SAVE LOCAL & VOICE BUTTONS)
+-- 3. PUBLIC FEED SCREEN LAYOUT (WHATSAPP HOLD-TO-RECORD BUTTON)
 -- --------------------------------------------------------------------
 local publicFeedLayout = {
   LinearLayout;
@@ -882,21 +897,24 @@ local publicFeedLayout = {
     };
     {
       Button;
-      id = "btnRecordPublicVoice";
-      text = "🎙️ Voice";
-      backgroundColor = "#455A64";
-      textColor = "#FFFFFF";
-      layout_marginLeft = "4dp";
-      ContentDescription = "Record Voice message button";
-    };
-    {
-      Button;
       id = "btnSendPublicMessage";
       text = "Post";
       backgroundColor = "#075E54";
       textColor = "#FFFFFF";
       layout_marginLeft = "4dp";
       ContentDescription = "Post public message button";
+    };
+    {
+      Button;
+      id = "btnRecordPublicVoice";
+      text = "🎙️";
+      backgroundColor = "#075E54";
+      textColor = "#FFFFFF";
+      textSize = "20sp";
+      layout_width = "50dp";
+      layout_height = "50dp";
+      layout_marginLeft = "6dp";
+      ContentDescription = "Hold to record voice note, release to send";
     };
   };
 }
@@ -949,7 +967,7 @@ local privateDirectoryLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 5. PRIVATE CHAT ROOM LAYOUT (WITH SAVE LOCAL & VOICE BUTTONS)
+-- 5. PRIVATE CHAT ROOM LAYOUT (WHATSAPP LOWER RIGHT VOICE BUTTON)
 -- --------------------------------------------------------------------
 local chatLayout = {
   LinearLayout;
@@ -1022,21 +1040,24 @@ local chatLayout = {
     };
     {
       Button;
-      id = "btnRecordPrivateVoice";
-      text = "🎙️ Voice";
-      backgroundColor = "#455A64";
-      textColor = "#FFFFFF";
-      layout_marginLeft = "4dp";
-      ContentDescription = "Record Voice message button";
-    };
-    {
-      Button;
       id = "btnSendMessage";
       text = "Send";
       backgroundColor = "#075E54";
       textColor = "#FFFFFF";
       layout_marginLeft = "4dp";
       ContentDescription = "Send private message button";
+    };
+    {
+      Button;
+      id = "btnRecordPrivateVoice";
+      text = "🎙️";
+      backgroundColor = "#075E54";
+      textColor = "#FFFFFF";
+      textSize = "20sp";
+      layout_width = "50dp";
+      layout_height = "50dp";
+      layout_marginLeft = "6dp";
+      ContentDescription = "Hold to record voice note, release to send";
     };
   };
 }
@@ -1097,9 +1118,12 @@ function showDashboardScreen()
   end
   
   btnLogout.onClick = function()
+    -- Strict Ephemeral Reset: Clear memory feeds on logout
     currentUser.name = ""
     currentUser.online = false
     isPolling = false
+    publicFeedMessages = {}
+    privateChatHistory = {}
     announce("Disconnected from messenger.")
     showLoginScreen()
   end
@@ -1122,9 +1146,7 @@ function showPublicFeedScreen()
     saveChatLocally("PublicFeed", "Global", publicFeedMessages)
   end
   
-  btnRecordPublicVoice.onClick = function()
-    toggleVoiceRecording(true, "")
-  end
+  setupHoldToRecordVoiceButton(btnRecordPublicVoice, true, "")
   
   fetchPublicFeedMessages()
   
@@ -1225,12 +1247,27 @@ function updatePublicFeedUI()
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listPublicMessages.setAdapter(adapter)
   
+  -- SINGLE TAP: Immediate Voice Note Audio Playback / Speech Read
   listPublicMessages.onItemClick = function(parent, view, position, id)
+    local idx = position + 1
+    local selectedMsg = publicFeedMessages[idx]
+    if selectedMsg then
+      if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
+        playVoiceNote(selectedMsg.audio or selectedMsg.voicePath)
+      else
+        announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
+      end
+    end
+  end
+  
+  -- LONG PRESS ONLY: Open Context Options Modal (React, Reply, Pin, Delete)
+  listPublicMessages.onItemLongClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = publicFeedMessages[idx]
     if selectedMsg then
       showMessageOptionsDialog(selectedMsg, idx, true, "")
     end
+    return true
   end
 end
 
@@ -1327,7 +1364,7 @@ function updatePrivateDirectoryUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER (WITH SAVE LOCAL & VOICE BUTTONS)
+-- PRIVATE CHAT ROOM CONTROLLER
 -- --------------------------------------------------------------------
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
@@ -1344,9 +1381,7 @@ function showPrivateChatScreen(targetUsername)
     saveChatLocally("PrivateChat", targetUsername, msgs)
   end
   
-  btnRecordPrivateVoice.onClick = function()
-    toggleVoiceRecording(false, targetUsername)
-  end
+  setupHoldToRecordVoiceButton(btnRecordPrivateVoice, false, targetUsername)
   
   fetchPrivateChatThread(targetUsername)
   
@@ -1459,12 +1494,27 @@ function updatePrivateChatUI(targetUsername)
   local adapter = LuaAdapter(activity, data, chatItemLayout)
   listChatMessages.setAdapter(adapter)
   
+  -- SINGLE TAP: Immediate Voice Note Audio Playback / Speech Read
   listChatMessages.onItemClick = function(parent, view, position, id)
+    local idx = position + 1
+    local selectedMsg = msgs[idx]
+    if selectedMsg then
+      if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
+        playVoiceNote(selectedMsg.audio or selectedMsg.voicePath)
+      else
+        announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
+      end
+    end
+  end
+  
+  -- LONG PRESS ONLY: Open Context Options Modal (React, Reply, Pin, Delete)
+  listChatMessages.onItemLongClick = function(parent, view, position, id)
     local idx = position + 1
     local selectedMsg = msgs[idx]
     if selectedMsg then
       showMessageOptionsDialog(selectedMsg, idx, false, targetUsername)
     end
+    return true
   end
 end
 
