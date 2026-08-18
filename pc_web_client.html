@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accessible Messenger - JAWS & NVDA Web Client</title>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; color: #111; }
+    .container { max-width: 500px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 20px; }
+    h1, h2 { text-align: center; }
+    .hidden { display: none !important; }
+    label { font-weight: bold; display: block; margin-top: 15px; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 12px; margin-top: 5px; box-sizing: border-box; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; }
+    button { width: 100%; padding: 14px; margin-top: 20px; font-size: 16px; font-weight: bold; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .btn-blue { background-color: #1565C0; }
+    .btn-green { background-color: #2E7D32; }
+    .btn-red { background-color: #D32F2F; }
+    .msg-box { height: 300px; border: 1px solid #ccc; overflow-y: scroll; padding: 10px; margin: 15px 0; background: #f9f9f9; border-radius: 4px; }
+    .user-list-item { padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 16px; }
+    .sr-only { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+  </style>
+</head>
+<body>
+
+<div class="container" role="main">
+
+  <!-- Live Announcer Region for Screen Readers -->
+  <div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- 1. LOGIN SCREEN -->
+  <div id="screen-login">
+    <h1>Accessible Messenger</h1>
+    <h2 style="font-size:16px; color:#555;">Web Client for JAWS & NVDA</h2>
+
+    <label for="username">Step 1: Enter Username</label>
+    <input type="text" id="username" placeholder="Type alias or handle" aria-label="Username edit box. Type alias here.">
+
+    <label for="password">Step 2: Enter Password</label>
+    <input type="password" id="password" placeholder="Type password" aria-label="Password edit box. Type password here.">
+
+    <label for="token">GitHub Token (Optional for write access)</label>
+    <input type="text" id="token" placeholder="ghp_xxxxxxxxxxxx" aria-label="GitHub Personal Access Token field.">
+
+    <button id="btn-login" class="btn-blue" onclick="onLogin()">Connect via GitHub</button>
+  </div>
+
+  <!-- 2. DASHBOARD SCREEN -->
+  <div id="screen-dashboard" class="hidden">
+    <h1>Messenger Home</h1>
+    <p id="txt-status" style="text-align:center; color:#2E7D32; font-weight:bold;"></p>
+
+    <button class="btn-blue" onclick="showPublicFeed()">🌐 Public Feed</button>
+    <button class="btn-green" onclick="showPrivateDirectory()">💬 Private Chats & Online Users</button>
+    <button class="btn-red" onclick="onLogout()">Disconnect / Logout</button>
+  </div>
+
+  <!-- 3. PUBLIC FEED SCREEN -->
+  <div id="screen-public" class="hidden">
+    <div style="display:flex; align-items:center; background:#0288D1; color:#fff; padding:10px; border-radius:4px;">
+      <button style="width:auto; margin:0; padding:8px 12px;" onclick="showDashboard()">&lt; Home</button>
+      <h2 style="margin:0 0 0 15px; font-size:18px;">Public Feed</h2>
+    </div>
+
+    <div id="public-msg-box" class="msg-box" role="log" aria-label="Public feed message history list." tabindex="0"></div>
+
+    <div style="display:flex;">
+      <input type="text" id="public-input" placeholder="Type public message..." aria-label="Public message input box." onkeypress="if(event.key==='Enter') postPublicMsg()">
+      <button class="btn-blue" style="width:auto; margin:0 0 0 10px; padding:0 20px;" onclick="postPublicMsg()">Post</button>
+    </div>
+  </div>
+
+  <!-- 4. PRIVATE DIRECTORY SCREEN -->
+  <div id="screen-directory" class="hidden">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:15px;">
+      <button style="width:auto; margin:0; padding:8px 12px;" onclick="showDashboard()">&lt; Home</button>
+      <h2 style="margin:0; font-size:18px;">Online Users</h2>
+      <button style="width:auto; margin:0; padding:8px 12px;" onclick="fetchUsers()">Refresh</button>
+    </div>
+
+    <div id="user-list-box" style="height:320px; border:1px solid #ccc; overflow-y:scroll;" role="list" aria-label="Online users list." tabindex="0"></div>
+  </div>
+
+  <!-- 5. PRIVATE CHAT ROOM SCREEN -->
+  <div id="screen-chat" class="hidden">
+    <div style="display:flex; align-items:center; background:#e0e0e0; padding:10px; border-radius:4px;">
+      <button style="width:auto; margin:0; padding:8px 12px;" onclick="showPrivateDirectory()">&lt; Directory</button>
+      <h2 id="chat-header" style="margin:0 0 0 15px; font-size:18px;">Private Chat</h2>
+    </div>
+
+    <div id="private-msg-box" class="msg-box" role="log" aria-label="Private message history." tabindex="0"></div>
+
+    <div style="display:flex;">
+      <input type="text" id="private-input" placeholder="Type private message..." aria-label="Private message input box." onkeypress="if(event.key==='Enter') postPrivateMsg()">
+      <button class="btn-green" style="width:auto; margin:0 0 0 10px; padding:0 20px;" onclick="postPrivateMsg()">Send</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const GITHUB_OWNER = "ghayasdev247";
+  const GITHUB_REPO = "messages";
+  const GITHUB_BRANCH = "main";
+
+  let currentUser = { name: "", token: "", online: false };
+  let activeScreen = "login";
+  let activeChatTarget = "";
+  let lastPublicCount = 0;
+  let lastPrivateCount = 0;
+  let pollTimer = null;
+  let heartbeatTimer = null;
+
+  function speak(text) {
+    const announcer = document.getElementById("sr-announcer");
+    announcer.innerText = text;
+  }
+
+  function getChatFilePath(u1, u2) {
+    return (u1.toLowerCase() < u2.toLowerCase()) ? `data/chats/${u1}_${u2}.json` : `data/chats/${u2}_${u1}.json`;
+  }
+
+  async function fetchFile(path) {
+    const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}?ref=${GITHUB_BRANCH}&t=${Date.now()}`;
+    const headers = { "Cache-Control": "no-cache" };
+    if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
+    try {
+      const res = await fetch(url, { headers });
+      if (res.ok) {
+        const body = await res.json();
+        const jsonStr = atob(body.content.replace(/\s+/g, ''));
+        return { success: true, data: JSON.parse(jsonStr), sha: body.sha };
+      }
+    } catch(e) {}
+    try {
+      const rawRes = await fetch(`https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}/${path}?t=${Date.now()}`);
+      if (rawRes.ok) return { success: true, data: await rawRes.json(), sha: null };
+    } catch(e) {}
+    return { success: false, data: null, sha: null };
+  }
+
+  async function readMergeCommit(path, newObj, msg) {
+    const { success, data, sha } = await fetchFile(path);
+    const list = (success && Array.isArray(data)) ? data : [];
+    list.push(newObj);
+
+    const jsonStr = JSON.stringify(list, null, 2);
+    const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+    const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}`;
+    const headers = { "Content-Type": "application/json" };
+    if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
+
+    const payload = { message: msg, content: b64, branch: GITHUB_BRANCH };
+    if (sha) payload.sha = sha;
+
+    try {
+      await fetch(url, { method: "PUT", headers, body: JSON.stringify(payload) });
+      return true;
+    } catch(e) { return false; }
+  }
+
+  function onLogin() {
+    const u = document.getElementById("username").value.trim();
+    const p = document.getElementById("password").value.trim();
+    const t = document.getElementById("token").value.trim();
+    if (!u || !p) { alert("Enter username and password"); return; }
+
+    currentUser = { name: u, token: t, online: true };
+    showDashboard();
+    speak("Connected as " + u + ". Welcome to Accessible Messenger.");
+    startPolling();
+  }
+
+  function onLogout() {
+    currentUser.online = false;
+    clearInterval(pollTimer);
+    clearInterval(heartbeatTimer);
+    document.getElementById("screen-dashboard").classList.add("hidden");
+    document.getElementById("screen-login").classList.remove("hidden");
+    speak("Disconnected from messenger.");
+  }
+
+  function showDashboard() {
+    activeScreen = "dashboard";
+    hideAll();
+    document.getElementById("txt-status").innerText = "Logged in as: " + currentUser.name + " (Web)";
+    document.getElementById("screen-dashboard").classList.remove("hidden");
+  }
+
+  function showPublicFeed() {
+    activeScreen = "public_feed";
+    hideAll();
+    document.getElementById("screen-public").classList.remove("hidden");
+    fetchPublic();
+  }
+
+  async function fetchPublic() {
+    const { success, data } = await fetchFile("data/public_feed.json");
+    if (success && data && activeScreen === "public_feed") {
+      if (data.length > lastPublicCount && lastPublicCount > 0) {
+        const latest = data[data.length - 1];
+        if (latest.sender !== currentUser.name) speak("New public message from " + latest.sender + ": " + latest.text);
+      }
+      lastPublicCount = data.length;
+      const box = document.getElementById("public-msg-box");
+      box.innerHTML = data.map(m => `<div><strong>${m.sender} (${m.time || ''}):</strong><br>${m.text}</div><br>`).join("");
+      box.scrollTop = box.scrollHeight;
+    }
+  }
+
+  async function postPublicMsg() {
+    const input = document.getElementById("public-input");
+    const txt = input.value.trim();
+    if (!txt) return;
+    input.value = "";
+    speak("Posting message: " + txt);
+    await readMergeCommit("data/public_feed.json", { sender: currentUser.name, text: txt, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }, "Public msg by " + currentUser.name);
+    fetchPublic();
+  }
+
+  function showPrivateDirectory() {
+    activeScreen = "private_directory";
+    hideAll();
+    document.getElementById("screen-directory").classList.remove("hidden");
+    fetchUsers();
+  }
+
+  async function fetchUsers() {
+    const { success, data } = await fetchFile("data/online_users.json");
+    if (success && data && activeScreen === "private_directory") {
+      const box = document.getElementById("user-list-box");
+      const now = Math.floor(Date.now() / 1000);
+      box.innerHTML = data.filter(u => u.name !== currentUser.name).map(u => {
+        const isOnline = (now - (u.last_seen || 0)) <= 120;
+        return `<div class="user-list-item" tabindex="0" role="button" aria-label="Chat with ${u.name}, ${isOnline ? 'Online' : 'Offline'}" onclick="openChat('${u.name}')" onkeypress="if(event.key==='Enter') openChat('${u.name}')">● ${u.name} (${isOnline ? 'Online' : 'Offline'})</div>`;
+      }).join("");
+    }
+  }
+
+  function openChat(name) {
+    activeScreen = "private_chat";
+    activeChatTarget = name;
+    lastPrivateCount = 0;
+    hideAll();
+    document.getElementById("chat-header").innerText = "Private: " + name;
+    document.getElementById("screen-chat").classList.remove("hidden");
+    speak("Opening chat with " + name);
+    fetchPrivate();
+  }
+
+  async function fetchPrivate() {
+    const path = getChatFilePath(currentUser.name, activeChatTarget);
+    const { success, data } = await fetchFile(path);
+    if (success && data && activeScreen === "private_chat") {
+      if (data.length > lastPrivateCount && lastPrivateCount > 0) {
+        const latest = data[data.length - 1];
+        if (latest.sender === activeChatTarget) speak("New private message from " + activeChatTarget + ": " + latest.text);
+      }
+      lastPrivateCount = data.length;
+      const box = document.getElementById("private-msg-box");
+      box.innerHTML = data.map(m => `<div><strong>${m.sender === currentUser.name ? 'Me' : m.sender} (${m.time || ''}):</strong><br>${m.text}</div><br>`).join("");
+      box.scrollTop = box.scrollHeight;
+    }
+  }
+
+  async function postPrivateMsg() {
+    const input = document.getElementById("private-input");
+    const txt = input.value.trim();
+    if (!txt || !activeChatTarget) return;
+    input.value = "";
+    speak("Sending message: " + txt);
+    const path = getChatFilePath(currentUser.name, activeChatTarget);
+    await readMergeCommit(path, { sender: currentUser.name, recipient: activeChatTarget, text: txt, time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) }, "Private msg to " + activeChatTarget);
+    fetchPrivate();
+  }
+
+  function hideAll() {
+    ["login", "dashboard", "public", "directory", "chat"].forEach(s => document.getElementById("screen-" + s).classList.add("hidden"));
+  }
+
+  function startPolling() {
+    pollTimer = setInterval(() => {
+      if (activeScreen === "public_feed") fetchPublic();
+      else if (activeScreen === "private_directory") fetchUsers();
+      else if (activeScreen === "private_chat" && activeChatTarget) fetchPrivate();
+    }, 3500);
+
+    heartbeatTimer = setInterval(async () => {
+      const { success, data, sha } = await fetchFile("data/online_users.json");
+      const list = (success && Array.isArray(data)) ? data : [];
+      const now = Math.floor(Date.now() / 1000);
+      let found = false;
+      list.forEach(u => { if (u.name === currentUser.name) { u.last_seen = now; u.status = "Online"; found = true; } });
+      if (!found) list.push({ name: currentUser.name, last_seen: now, status: "Online" });
+
+      const jsonStr = JSON.stringify(list, null, 2);
+      const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+      const headers = { "Content-Type": "application/json" };
+      if (currentUser.token) headers["Authorization"] = "token " + currentUser.token;
+      fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/data/online_users.json`, {
+        method: "PUT", headers, body: JSON.stringify({ message: "Web heartbeat for " + currentUser.name, content: b64, sha, branch: GITHUB_BRANCH })
+      });
+    }, 30000);
+  }
+</script>
+</body>
+</html>

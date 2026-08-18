@@ -1,7 +1,7 @@
 """
-Accessible Messenger - PC Desktop Testing Client
-Built with Python standard library (tkinter, urllib, json, base64, threading)
-Zero external dependencies required.
+Accessible Messenger - Accessible PC Desktop Testing Client
+Built with Python standard library (tkinter, urllib, json, base64, threading, subprocess)
+Fully optimized for JAWS, NVDA, and System Speech Screen Readers.
 Communicates directly with GitHub repository: ghayasdev247/messages (branch main)
 """
 
@@ -10,6 +10,7 @@ import time
 import json
 import base64
 import threading
+import subprocess
 import urllib.request
 import urllib.parse
 import tkinter as tk
@@ -29,6 +30,23 @@ last_heartbeat_time = 0
 is_polling = False
 
 # --------------------------------------------------------------------
+# SCREEN READER SPEECH ENGINE (JAWS / NVDA / SAPI5)
+# --------------------------------------------------------------------
+def announce(text):
+    """Speaks announcements out loud for JAWS, NVDA, and visually impaired users."""
+    if not text:
+        return
+    def _speak():
+        try:
+            # Clean string for PowerShell command
+            clean_text = text.replace('"', '').replace("'", "").replace("\n", " ")
+            cmd = ['powershell', '-Command', f'Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak("{clean_text}")']
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    threading.Thread(target=_speak, daemon=True).start()
+
+# --------------------------------------------------------------------
 # DETERMINISTIC PATH GENERATOR
 # --------------------------------------------------------------------
 def get_chat_file_path(u1, u2):
@@ -45,7 +63,7 @@ def get_chat_file_path(u1, u2):
 def fetch_github_file(file_path):
     api_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{file_path}?ref={GITHUB_BRANCH}&t={int(time.time())}"
     headers = {
-        "User-Agent": "ChatifyPCPopup",
+        "User-Agent": "ChatifyPC",
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Accept": "application/vnd.github.v3+json"
     }
@@ -63,7 +81,6 @@ def fetch_github_file(file_path):
     except Exception:
         pass
 
-    # Fallback raw content URL
     raw_url = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{file_path}?t={int(time.time())}"
     try:
         req = urllib.request.Request(raw_url, headers={"User-Agent": "ChatifyPC"})
@@ -116,14 +133,14 @@ def read_merge_commit(file_path, new_message_obj, commit_msg, callback=None):
     threading.Thread(target=_task, daemon=True).start()
 
 # --------------------------------------------------------------------
-# PC DESKTOP GUI APPLICATION
+# PC DESKTOP GUI APPLICATION WITH ACCESSIBILITY
 # --------------------------------------------------------------------
 class AccessibleMessengerPCApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("Accessible Messenger - PC Testing Client")
-        self.geometry("480x640")
+        self.title("Accessible Messenger - JAWS & NVDA Accessible PC Client")
+        self.geometry("520x680")
         self.configure(bg="#F4F6F9")
 
         self.main_container = tk.Frame(self, bg="#F4F6F9")
@@ -135,6 +152,10 @@ class AccessibleMessengerPCApp(tk.Tk):
         for widget in self.main_container.winfo_children():
             widget.destroy()
 
+    def make_accessible(self, widget, announcement_text):
+        """Binds focus event so screen readers speak when user tabs onto widget."""
+        widget.bind("<FocusIn>", lambda e: announce(announcement_text))
+
     # ----------------------------------------------------------------
     # 1. LOGIN SCREEN
     # ----------------------------------------------------------------
@@ -143,31 +164,44 @@ class AccessibleMessengerPCApp(tk.Tk):
         active_screen = "login"
         is_polling = False
         self.clear_container()
+        announce("Accessible Messenger. Login Screen.")
 
         title_label = tk.Label(self.main_container, text="Accessible Messenger", font=("Arial", 18, "bold"), bg="#F4F6F9", fg="#000000")
         title_label.pack(pady=(20, 5))
 
-        subtitle = tk.Label(self.main_container, text="PC Desktop Testing Client (GitHub Serverless)", font=("Arial", 11), bg="#F4F6F9", fg="#555555")
+        subtitle = tk.Label(self.main_container, text="Accessible PC Testing Client for JAWS & NVDA", font=("Arial", 11), bg="#F4F6F9", fg="#555555")
         subtitle.pack(pady=(0, 20))
 
         # Username
-        tk.Label(self.main_container, text="Step 1: Enter Username", font=("Arial", 11, "bold"), bg="#F4F6F9", anchor="w").pack(fill="x", padx=30, pady=(10, 2))
-        self.ent_username = ttk.Entry(self.main_container, font=("Arial", 12))
+        lbl_u = tk.Label(self.main_container, text="Step 1: Enter Username", font=("Arial", 11, "bold"), bg="#F4F6F9", anchor="w")
+        lbl_u.pack(fill="x", padx=30, pady=(10, 2))
+
+        self.ent_username = tk.Entry(self.main_container, font=("Arial", 12), bg="#FFFFFF", fg="#000000")
         self.ent_username.pack(fill="x", padx=30, ipady=6)
+        self.make_accessible(self.ent_username, "Username edit box. Type your desired alias here.")
 
         # Password
-        tk.Label(self.main_container, text="Step 2: Enter Password", font=("Arial", 11, "bold"), bg="#F4F6F9", anchor="w").pack(fill="x", padx=30, pady=(10, 2))
-        self.ent_password = ttk.Entry(self.main_container, font=("Arial", 12), show="*")
+        lbl_p = tk.Label(self.main_container, text="Step 2: Enter Password", font=("Arial", 11, "bold"), bg="#F4F6F9", anchor="w")
+        lbl_p.pack(fill="x", padx=30, pady=(10, 2))
+
+        self.ent_password = tk.Entry(self.main_container, font=("Arial", 12), show="*", bg="#FFFFFF", fg="#000000")
         self.ent_password.pack(fill="x", padx=30, ipady=6)
+        self.make_accessible(self.ent_password, "Password edit box. Type your password here.")
 
         # GitHub Token
-        tk.Label(self.main_container, text="GitHub Token (Optional for write access)", font=("Arial", 10), bg="#F4F6F9", fg="#777777", anchor="w").pack(fill="x", padx=30, pady=(10, 2))
-        self.ent_token = ttk.Entry(self.main_container, font=("Arial", 10))
+        lbl_t = tk.Label(self.main_container, text="GitHub Token (Optional for write access)", font=("Arial", 10), bg="#F4F6F9", fg="#777777", anchor="w")
+        lbl_t.pack(fill="x", padx=30, pady=(10, 2))
+
+        self.ent_token = tk.Entry(self.main_container, font=("Arial", 10), bg="#FFFFFF", fg="#000000")
         self.ent_token.pack(fill="x", padx=30, ipady=4)
+        self.make_accessible(self.ent_token, "GitHub Personal Access Token input field.")
 
         # Login Button
         btn_login = tk.Button(self.main_container, text="Connect via GitHub", font=("Arial", 12, "bold"), bg="#1565C0", fg="#FFFFFF", activebackground="#0D47A1", activeforeground="#FFFFFF", command=self.on_login_click)
         btn_login.pack(fill="x", padx=30, pady=25, ipady=8)
+        self.make_accessible(btn_login, "Connect via GitHub button. Press Enter to sign in.")
+
+        self.ent_username.focus_set()
 
     def on_login_click(self):
         username = self.ent_username.get().strip()
@@ -175,6 +209,7 @@ class AccessibleMessengerPCApp(tk.Tk):
         token = self.ent_token.get().strip()
 
         if not username or not password:
+            announce("Error: Please enter both a username and password.")
             messagebox.showerror("Error", "Please enter both a username and password.")
             return
 
@@ -182,6 +217,7 @@ class AccessibleMessengerPCApp(tk.Tk):
         current_user["github_token"] = token
         current_user["online"] = True
 
+        announce(f"Connected as {username}. Welcome to Homepage.")
         self.show_dashboard_screen()
         self.start_polling_loop()
 
@@ -196,21 +232,27 @@ class AccessibleMessengerPCApp(tk.Tk):
         title_label = tk.Label(self.main_container, text="Messenger Home", font=("Arial", 18, "bold"), bg="#FFFFFF", fg="#000000")
         title_label.pack(pady=(25, 5))
 
-        user_status = tk.Label(self.main_container, text=f"Logged in as: {current_user['name']} (PC Client)", font=("Arial", 11, "bold"), bg="#FFFFFF", fg="#2E7D32")
+        user_status = tk.Label(self.main_container, text=f"Logged in as: {current_user['name']}", font=("Arial", 11, "bold"), bg="#FFFFFF", fg="#2E7D32")
         user_status.pack(pady=(0, 30))
 
         btn_public = tk.Button(self.main_container, text="🌐 Public Feed", font=("Arial", 13, "bold"), bg="#0288D1", fg="#FFFFFF", command=self.show_public_feed_screen)
         btn_public.pack(fill="x", padx=30, pady=10, ipady=12)
+        self.make_accessible(btn_public, "Public Feed button. Press Enter to open public broadcast room.")
 
         btn_private = tk.Button(self.main_container, text="💬 Private Chats & Online Users", font=("Arial", 13, "bold"), bg="#2E7D32", fg="#FFFFFF", command=self.show_private_directory_screen)
         btn_private.pack(fill="x", padx=30, pady=10, ipady=12)
+        self.make_accessible(btn_private, "Private Chats button. Press Enter to view online users directory.")
 
         btn_logout = tk.Button(self.main_container, text="Disconnect / Logout", font=("Arial", 11), bg="#D32F2F", fg="#FFFFFF", command=self.on_logout_click)
         btn_logout.pack(fill="x", padx=30, pady=(30, 0), ipady=8)
+        self.make_accessible(btn_logout, "Disconnect button. Press Enter to log out.")
+
+        btn_public.focus_set()
 
     def on_logout_click(self):
         current_user["name"] = ""
         current_user["online"] = False
+        announce("Disconnected from messenger.")
         self.show_login_screen()
 
     # ----------------------------------------------------------------
@@ -221,12 +263,12 @@ class AccessibleMessengerPCApp(tk.Tk):
         active_screen = "public_feed"
         self.clear_container()
 
-        # Header bar
         header_frame = tk.Frame(self.main_container, bg="#0288D1")
         header_frame.pack(fill="x")
 
         btn_back = tk.Button(header_frame, text="< Home", font=("Arial", 10, "bold"), bg="#0288D1", fg="#FFFFFF", bd=0, command=self.show_dashboard_screen)
         btn_back.pack(side="left", padx=10, pady=10)
+        self.make_accessible(btn_back, "Back to home dashboard button.")
 
         header_title = tk.Label(header_frame, text="Public Feed (GitHub)", font=("Arial", 14, "bold"), bg="#0288D1", fg="#FFFFFF")
         header_title.pack(side="left", padx=10, pady=10)
@@ -234,17 +276,22 @@ class AccessibleMessengerPCApp(tk.Tk):
         # Messages View
         self.txt_public_messages = scrolledtext.ScrolledText(self.main_container, font=("Arial", 11), bg="#F0F4F8", wrap="word")
         self.txt_public_messages.pack(fill="both", expand=True, padx=10, pady=10)
+        self.make_accessible(self.txt_public_messages, "Public messages history list. Use arrow keys to read messages.")
 
         # Input Frame
         input_frame = tk.Frame(self.main_container, bg="#F0F4F8")
         input_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-        self.ent_public_input = ttk.Entry(input_frame, font=("Arial", 11))
+        self.ent_public_input = tk.Entry(input_frame, font=("Arial", 11), bg="#FFFFFF", fg="#000000")
         self.ent_public_input.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 5))
+        self.make_accessible(self.ent_public_input, "Public message input field. Type message to post.")
+        self.ent_public_input.bind("<Return>", lambda e: self.on_send_public_click())
 
         btn_send = tk.Button(input_frame, text="Post", font=("Arial", 10, "bold"), bg="#0288D1", fg="#FFFFFF", command=self.on_send_public_click)
         btn_send.pack(side="right", ipady=4, ipadx=10)
+        self.make_accessible(btn_send, "Post public message button. Press Enter to publish.")
 
+        self.ent_public_input.focus_set()
         self.fetch_public_feed_async()
 
     def on_send_public_click(self):
@@ -259,6 +306,7 @@ class AccessibleMessengerPCApp(tk.Tk):
         }
 
         self.ent_public_input.delete(0, tk.END)
+        announce(f"Posting public message: {text}")
 
         def on_complete(success, merged_list):
             if success:
@@ -268,8 +316,15 @@ class AccessibleMessengerPCApp(tk.Tk):
 
     def fetch_public_feed_async(self):
         def _task():
+            global last_public_count
             success, data, _ = fetch_github_file("data/public_feed.json")
             if success and data and active_screen == "public_feed":
+                new_count = len(data)
+                if new_count > last_public_count and last_public_count > 0:
+                    latest = data[-1]
+                    if latest.get("sender") != current_user["name"]:
+                        announce(f"New public message from {latest.get('sender')}: {latest.get('text')}")
+                last_public_count = new_count
                 self.after(0, lambda: self.update_public_feed_ui(data))
         threading.Thread(target=_task, daemon=True).start()
 
@@ -302,17 +357,22 @@ class AccessibleMessengerPCApp(tk.Tk):
 
         btn_back = tk.Button(header_frame, text="< Home", font=("Arial", 10), command=self.show_dashboard_screen)
         btn_back.pack(side="left")
+        self.make_accessible(btn_back, "Back to home dashboard button.")
 
         title = tk.Label(header_frame, text="Private Conversations", font=("Arial", 13, "bold"), bg="#FFFFFF")
         title.pack(side="left", padx=10)
 
         btn_refresh = tk.Button(header_frame, text="Refresh", font=("Arial", 10), command=self.fetch_online_users_async)
         btn_refresh.pack(side="right")
+        self.make_accessible(btn_refresh, "Refresh online users button.")
 
         self.lst_online_users = tk.Listbox(self.main_container, font=("Arial", 12), selectmode="single")
         self.lst_online_users.pack(fill="both", expand=True, padx=10, pady=10)
         self.lst_online_users.bind("<Double-1>", self.on_user_select)
+        self.lst_online_users.bind("<Return>", self.on_user_select)
+        self.make_accessible(self.lst_online_users, "Online users list. Use up and down arrow keys to browse users, press Enter to chat.")
 
+        self.lst_online_users.focus_set()
         self.fetch_online_users_async()
 
     def fetch_online_users_async(self):
@@ -346,15 +406,17 @@ class AccessibleMessengerPCApp(tk.Tk):
         if selection:
             index = selection[0]
             target_user = self.user_data_map[index]
+            announce(f"Opening private chat with {target_user}")
             self.show_private_chat_screen(target_user)
 
     # ----------------------------------------------------------------
     # 5. PRIVATE CHAT ROOM SCREEN (Deterministic Pathing)
     # ----------------------------------------------------------------
     def show_private_chat_screen(self, target_username):
-        global active_screen, active_chat_target
+        global active_screen, active_chat_target, last_private_count
         active_screen = "private_chat"
         active_chat_target = target_username
+        last_private_count = 0
         self.clear_container()
 
         header_frame = tk.Frame(self.main_container, bg="#E0E0E0")
@@ -362,22 +424,28 @@ class AccessibleMessengerPCApp(tk.Tk):
 
         btn_back = tk.Button(header_frame, text="< Directory", font=("Arial", 10), command=self.show_private_directory_screen)
         btn_back.pack(side="left", padx=10, pady=8)
+        self.make_accessible(btn_back, "Back to private chats directory button.")
 
         title = tk.Label(header_frame, text=f"Private: {target_username}", font=("Arial", 12, "bold"), bg="#E0E0E0")
         title.pack(side="left", padx=10)
 
         self.txt_private_messages = scrolledtext.ScrolledText(self.main_container, font=("Arial", 11), bg="#F9F9F9", wrap="word")
         self.txt_private_messages.pack(fill="both", expand=True, padx=10, pady=10)
+        self.make_accessible(self.txt_private_messages, f"Private messages thread with {target_username}.")
 
         input_frame = tk.Frame(self.main_container, bg="#F9F9F9")
         input_frame.pack(fill="x", padx=10, pady=(0, 10))
 
-        self.ent_private_input = ttk.Entry(input_frame, font=("Arial", 11))
+        self.ent_private_input = tk.Entry(input_frame, font=("Arial", 11), bg="#FFFFFF", fg="#000000")
         self.ent_private_input.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 5))
+        self.make_accessible(self.ent_private_input, f"Private message input field to {target_username}.")
+        self.ent_private_input.bind("<Return>", lambda e: self.on_send_private_click())
 
         btn_send = tk.Button(input_frame, text="Send", font=("Arial", 10, "bold"), bg="#2E7D32", fg="#FFFFFF", command=self.on_send_private_click)
         btn_send.pack(side="right", ipady=4, ipadx=10)
+        self.make_accessible(btn_send, "Send private message button. Press Enter to send.")
 
+        self.ent_private_input.focus_set()
         self.fetch_private_messages_async(target_username)
 
     def on_send_private_click(self):
@@ -393,6 +461,8 @@ class AccessibleMessengerPCApp(tk.Tk):
         }
 
         self.ent_private_input.delete(0, tk.END)
+        announce(f"Sending private message: {text}")
+
         chat_path = get_chat_file_path(current_user["name"], active_chat_target)
 
         def on_complete(success, merged_list):
@@ -405,8 +475,15 @@ class AccessibleMessengerPCApp(tk.Tk):
         chat_path = get_chat_file_path(current_user["name"], target_username)
 
         def _task():
+            global last_private_count
             success, data, _ = fetch_github_file(chat_path)
             if success and data and active_screen == "private_chat" and active_chat_target == target_username:
+                new_count = len(data)
+                if new_count > last_private_count and last_private_count > 0:
+                    latest = data[-1]
+                    if latest.get("sender") == target_username:
+                        announce(f"New private message from {target_username}: {latest.get('text')}")
+                last_private_count = new_count
                 self.after(0, lambda: self.update_private_chat_ui(data))
 
         threading.Thread(target=_task, daemon=True).start()
