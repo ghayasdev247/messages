@@ -1,0 +1,9 @@
+# Database & Caches
+database.db
+__pycache__/
+*.pyc
+
+# Builds & Packages
+*.xpk
+*.apk
+repo/
