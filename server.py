@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.1.1",
-                "version_code": 12,
+                "version": "1.1.2",
+                "version_code": 13,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.1.1: Connected primary Firebase Realtime Database: https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app/"
+                "changelog": "Version 1.1.2: Fixed table.insert crash and setTextStyle/setMargins errors with WhatsApp UI redesign."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

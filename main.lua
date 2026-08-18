@@ -1,9 +1,10 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.1.1 (Build Code: 12)
--- Primary Server: Firebase Realtime Database (messages-server-f2a99)
--- Fallback Server: GitHub REST API (ghayasdev247/messages) + Local PC Server
+-- Version: 1.1.2 (Build Code: 13)
+-- Features: Modern WhatsApp & Facebook Messenger Card UI
+-- Primary Cloud Engine: Live Firebase Realtime Database (messages-server-f2a99)
+-- Failover Cloud Engine: GitHub REST API (ghayasdev247/messages) + Local PC API
 -- ====================================================================
 
 require "import"
@@ -18,8 +19,8 @@ import "android.content.Context"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.1.1"
-local APP_VERSION_CODE = 12
+local APP_VERSION = "1.1.2"
+local APP_VERSION_CODE = 13
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -291,7 +292,7 @@ function saveUpdateFile(versionStr, uContent)
 end
 
 -- --------------------------------------------------------------------
--- UNIFIED NETWORKING ENGINE (Primary: Firebase RTDB | Fallback: GitHub API)
+-- UNIFIED NETWORKING ENGINE (Bulletproof Firebase Parsing + Fallback)
 -- --------------------------------------------------------------------
 function fetchFirebaseData(path, callback)
   local fbPath = path:gsub("%.json$", "")
@@ -300,13 +301,19 @@ function fetchFirebaseData(path, callback)
   Http.get(fbUrl, function(code, content)
     if code == 200 and content and content ~= "null" then
       local fbData = decodeJSON(content)
-      if fbData then
+      if fbData and type(fbData) == "table" then
         local list = {}
         if fbData[1] ~= nil then
-          list = fbData
+          for _, item in ipairs(fbData) do
+            if type(item) == "table" then
+              table.insert(list, item)
+            end
+          end
         else
           for _, v in pairs(fbData) do
-            table.insert(list, v)
+            if type(v) == "table" then
+              table.insert(list, v)
+            end
           end
         end
         callback(true, list)
@@ -334,7 +341,7 @@ end
 function apiGet(endpoint, githubFilePath, callback)
   -- Priority 1: Firebase Realtime Database (messages-server-f2a99)
   fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
-    if fbSuccess and fbData and #fbData > 0 then
+    if fbSuccess and fbData and type(fbData) == "table" and #fbData > 0 then
       callback(true, fbData)
       return
     end
@@ -442,7 +449,7 @@ function apiPost(endpoint, payload, callback)
 end
 
 -- --------------------------------------------------------------------
--- 1. LOGIN / IDENTITY SCREEN LAYOUT
+-- 1. WHATSAPP & MESSENGER STYLED LOGIN SCREEN
 -- --------------------------------------------------------------------
 local loginLayout = {
   LinearLayout;
@@ -454,20 +461,20 @@ local loginLayout = {
   {
     TextView;
     text = "Accessible Messenger";
-    textSize = "24sp";
-    textColor = "#1565C0";
+    textSize = "26sp";
+    textColor = "#075E54";
     layout_gravity = "center";
     padding = "10dp";
     ContentDescription = "Accessible Messenger Application Header";
   };
   {
     TextView;
-    text = "Anonymous Login (v" .. APP_VERSION .. ")";
+    text = "Anonymous Cloud Login (v" .. APP_VERSION .. ")";
     textSize = "15sp";
     textColor = "#555555";
     layout_gravity = "center";
-    layout_marginBottom = "20dp";
-    ContentDescription = "Subtitle: Anonymous Login version " .. APP_VERSION;
+    layout_marginBottom = "25dp";
+    ContentDescription = "Subtitle: Anonymous Cloud Login version " .. APP_VERSION;
   };
   {
     TextView;
@@ -483,7 +490,7 @@ local loginLayout = {
     hint = "Type any alias or handle";
     layout_width = "fill";
     textSize = "17sp";
-    padding = "12dp";
+    padding = "14dp";
     backgroundColor = "#FFFFFF";
     ContentDescription = "Username edit box. Type your desired alias here.";
   };
@@ -492,7 +499,7 @@ local loginLayout = {
     text = "Step 2: Enter Password";
     textSize = "15sp";
     textColor = "#222222";
-    layout_marginTop = "12dp";
+    layout_marginTop = "14dp";
     ContentDescription = "Step 2: Enter Password label";
   };
   {
@@ -502,7 +509,7 @@ local loginLayout = {
     inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD;
     layout_width = "fill";
     textSize = "17sp";
-    padding = "12dp";
+    padding = "14dp";
     backgroundColor = "#FFFFFF";
     ContentDescription = "Password edit box. Type your password here.";
   };
@@ -513,7 +520,7 @@ local loginLayout = {
     layout_width = "fill";
     layout_height = "55dp";
     layout_marginTop = "25dp";
-    backgroundColor = "#1565C0";
+    backgroundColor = "#075E54";
     textColor = "#FFFFFF";
     textSize = "18sp";
     ContentDescription = "Connect to Messenger button. Double tap to sign in.";
@@ -524,7 +531,7 @@ local loginLayout = {
     text = "🔄 Check for Auto Updates";
     layout_width = "fill";
     layout_height = "45dp";
-    layout_marginTop = "12dp";
+    layout_marginTop = "14dp";
     backgroundColor = "#455A64";
     textColor = "#FFFFFF";
     textSize = "14sp";
@@ -533,7 +540,7 @@ local loginLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 2. HOMEPAGE / DASHBOARD LAYOUT
+-- 2. HOMEPAGE / DASHBOARD LAYOUT (WHATSAPP/MESSENGER STYLE)
 -- --------------------------------------------------------------------
 local dashboardLayout = {
   LinearLayout;
@@ -547,7 +554,7 @@ local dashboardLayout = {
     id = "txtDashboardHeader";
     text = "Messenger Main Home";
     textSize = "24sp";
-    textColor = "#1565C0";
+    textColor = "#075E54";
     layout_gravity = "center";
     layout_marginBottom = "5dp";
     ContentDescription = "Messenger Main Home Screen Header";
@@ -569,7 +576,7 @@ local dashboardLayout = {
     layout_width = "fill";
     layout_height = "65dp";
     layout_marginBottom = "15dp";
-    backgroundColor = "#0288D1";
+    backgroundColor = "#128C7E";
     textColor = "#FFFFFF";
     textSize = "18sp";
     ContentDescription = "Public Feed button. Double tap to view or send public messages.";
@@ -581,7 +588,7 @@ local dashboardLayout = {
     layout_width = "fill";
     layout_height = "65dp";
     layout_marginBottom = "15dp";
-    backgroundColor = "#2E7D32";
+    backgroundColor = "#075E54";
     textColor = "#FFFFFF";
     textSize = "18sp";
     ContentDescription = "Private Chats button. Double tap to view online users and chat privately.";
@@ -612,7 +619,7 @@ local dashboardLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 3. PUBLIC FEED SCREEN LAYOUT
+-- 3. PUBLIC FEED SCREEN LAYOUT (WHATSAPP TEAL HEADER)
 -- --------------------------------------------------------------------
 local publicFeedLayout = {
   LinearLayout;
@@ -620,25 +627,25 @@ local publicFeedLayout = {
   layout_width = "fill";
   layout_height = "fill";
   padding = "12dp";
-  backgroundColor = "#EBF2F7";
+  backgroundColor = "#E5DDD5"; -- WhatsApp Chat Wallpaper Background Tint
   {
     LinearLayout;
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
-    padding = "10dp";
-    backgroundColor = "#0288D1";
+    padding = "12dp";
+    backgroundColor = "#075E54";
     {
       Button;
       id = "btnPublicToHome";
       text = "< Home";
       textColor = "#FFFFFF";
-      backgroundColor = "#0288D1";
+      backgroundColor = "#075E54";
       ContentDescription = "Back to home dashboard button";
     };
     {
       TextView;
-      text = "Public Feed";
+      text = "Public Feed Room";
       textSize = "20sp";
       textColor = "#FFFFFF";
       layout_marginLeft = "15dp";
@@ -663,13 +670,14 @@ local publicFeedLayout = {
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
+    padding = "4dp";
     {
       EditText;
       id = "editPublicMessageInput";
       hint = "Type public message...";
       layout_weight = "1";
       textSize = "16sp";
-      padding = "12dp";
+      padding = "14dp";
       backgroundColor = "#FFFFFF";
       ContentDescription = "Public message text field. Type message to post publicly.";
     };
@@ -677,7 +685,7 @@ local publicFeedLayout = {
       Button;
       id = "btnSendPublicMessage";
       text = "Post";
-      backgroundColor = "#0288D1";
+      backgroundColor = "#075E54";
       textColor = "#FFFFFF";
       layout_marginLeft = "8dp";
       ContentDescription = "Post public message button. Double tap to publish.";
@@ -711,7 +719,7 @@ local privateDirectoryLayout = {
       TextView;
       text = "Private Conversations";
       textSize = "18sp";
-      textColor = "#111111";
+      textColor = "#075E54";
       layout_marginLeft = "10dp";
       layout_weight = "1";
       ContentDescription = "Private Conversations directory. Select an online user to chat with.";
@@ -733,7 +741,7 @@ local privateDirectoryLayout = {
 }
 
 -- --------------------------------------------------------------------
--- 5. PRIVATE CHAT ROOM LAYOUT
+-- 5. PRIVATE CHAT ROOM LAYOUT (WHATSAPP BUBBLE STYLED)
 -- --------------------------------------------------------------------
 local chatLayout = {
   LinearLayout;
@@ -741,20 +749,20 @@ local chatLayout = {
   layout_width = "fill";
   layout_height = "fill";
   padding = "12dp";
-  backgroundColor = "#EBF2F7";
+  backgroundColor = "#E5DDD5"; -- WhatsApp Chat Background Color Tint
   {
     LinearLayout;
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
-    padding = "10dp";
-    backgroundColor = "#37474F";
+    padding = "12dp";
+    backgroundColor = "#075E54";
     {
       Button;
       id = "btnBackToPrivateList";
       text = "< Directory";
       textColor = "#FFFFFF";
-      backgroundColor = "#37474F";
+      backgroundColor = "#075E54";
       ContentDescription = "Back to private chats directory";
     };
     {
@@ -785,13 +793,14 @@ local chatLayout = {
     orientation = "horizontal";
     layout_width = "fill";
     gravity = "center_vertical";
+    padding = "4dp";
     {
       EditText;
       id = "editMessageInput";
-      hint = "Type private message...";
+      hint = "Type message...";
       layout_weight = "1";
       textSize = "16sp";
-      padding = "12dp";
+      padding = "14dp";
       backgroundColor = "#FFFFFF";
       ContentDescription = "Private message text field. Type your message here.";
     };
@@ -799,7 +808,7 @@ local chatLayout = {
       Button;
       id = "btnSendMessage";
       text = "Send";
-      backgroundColor = "#2E7D32";
+      backgroundColor = "#075E54";
       textColor = "#FFFFFF";
       layout_marginLeft = "8dp";
       ContentDescription = "Send private message button. Double tap to send.";
@@ -909,12 +918,12 @@ end
 
 function fetchPublicFeedMessages()
   apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
-    if success and data then
+    if success and data and type(data) == "table" then
       local newCount = #data
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
         local latest = data[newCount]
-        if latest and latest.sender ~= currentUser.name then
-          announce("New public message from " .. latest.sender .. ": " .. latest.text)
+        if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
+          announce("New public message from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
         end
       end
       lastPublicMessageCount = newCount
@@ -929,11 +938,12 @@ function fetchPublicFeedMessages()
 end
 
 function updatePublicFeedUI()
+  -- Jieshuo Max 100% Safe Card UI (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
-    padding = "10dp";
+    padding = "12dp";
     backgroundColor = "#FFFFFF";
     {
       LinearLayout;
@@ -943,7 +953,7 @@ function updatePublicFeedUI()
         TextView;
         id = "msgSender";
         textSize = "14sp";
-        textColor = "#0288D1";
+        textColor = "#075E54";
         layout_weight = "1";
       };
       {
@@ -963,12 +973,16 @@ function updatePublicFeedUI()
   }
   
   local data = {}
-  for _, m in ipairs(publicFeedMessages) do
-    table.insert(data, {
-      msgSender = m.sender,
-      msgTime = m.time or "",
-      msgText = m.text
-    })
+  if type(publicFeedMessages) == "table" then
+    for _, m in ipairs(publicFeedMessages) do
+      if type(m) == "table" then
+        table.insert(data, {
+          msgSender = m.sender or "Anonymous",
+          msgTime = m.time or "",
+          msgText = m.text or ""
+        })
+      end
+    end
   end
   
   local adapter = LuaAdapter(activity, data, chatItemLayout)
@@ -997,16 +1011,18 @@ end
 
 function fetchOnlineUsersList()
   apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
-    if success and data then
+    if success and data and type(data) == "table" then
       local filtered = {}
       for _, u in ipairs(data) do
-        local name = u.name or u.username
-        if name and name ~= currentUser.name then
-          local statusText = u.status or (u.online and "Online" or "Offline")
-          table.insert(filtered, {
-            name = name,
-            status = statusText
-          })
+        if type(u) == "table" then
+          local name = u.name or u.username
+          if name and name ~= currentUser.name then
+            local statusText = u.status or (u.online and "Online" or "Offline")
+            table.insert(filtered, {
+              name = name,
+              status = statusText
+            })
+          end
         end
       end
       onlineUsersList = filtered
@@ -1040,11 +1056,15 @@ function updatePrivateDirectoryUI()
   }
   
   local data = {}
-  for _, u in ipairs(onlineUsersList) do
-    table.insert(data, { 
-      itemName = u.name, 
-      itemStatus = "● " .. u.status 
-    })
+  if type(onlineUsersList) == "table" then
+    for _, u in ipairs(onlineUsersList) do
+      if type(u) == "table" then
+        table.insert(data, { 
+          itemName = u.name or "User", 
+          itemStatus = "● " .. (u.status or "Online")
+        })
+      end
+    end
   end
   
   local adapter = LuaAdapter(activity, data, itemLayout)
@@ -1058,7 +1078,7 @@ function updatePrivateDirectoryUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER
+-- PRIVATE CHAT ROOM CONTROLLER (WHATSAPP GREEN & WHITE BUBBLES)
 -- --------------------------------------------------------------------
 function showPrivateChatScreen(targetUsername)
   activeScreen = "private_chat"
@@ -1067,8 +1087,8 @@ function showPrivateChatScreen(targetUsername)
   lastRenderedPrivateCount = -1
   activity.setContentView(loadlayout(chatLayout))
   
-  txtChatTargetHeader.setText("Private: " .. targetUsername)
-  txtChatTargetHeader.setContentDescription("Currently chatting in private room.")
+  txtChatTargetHeader.setText("Chat: " .. targetUsername)
+  txtChatTargetHeader.setContentDescription("Currently chatting in private room with " .. targetUsername)
   
   fetchPrivateChatThread(targetUsername)
   
@@ -1105,12 +1125,12 @@ function fetchPrivateChatThread(targetUsername)
   local endpoint = "/api/private-messages?user=" .. currentUser.name .. "&target=" .. targetUsername
   
   apiGet(endpoint, chatPath, function(success, data)
-    if success and data then
+    if success and data and type(data) == "table" then
       local newCount = #data
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
         local latest = data[newCount]
-        if latest and latest.sender == targetUsername then
-          announce("New private message from " .. targetUsername .. ": " .. latest.text)
+        if latest and type(latest) == "table" and latest.sender == targetUsername then
+          announce("New private message from " .. targetUsername .. ": " .. (latest.text or ""))
         end
       end
       lastPrivateMessageCount = newCount
@@ -1125,11 +1145,12 @@ function fetchPrivateChatThread(targetUsername)
 end
 
 function updatePrivateChatUI(targetUsername)
+  -- Jieshuo Max 100% Safe Card UI (No textStyle or layout_margin attributes)
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
-    padding = "10dp";
+    padding = "12dp";
     backgroundColor = "#FFFFFF";
     {
       LinearLayout;
@@ -1138,8 +1159,8 @@ function updatePrivateChatUI(targetUsername)
       {
         TextView;
         id = "msgSender";
-        textSize = "12sp";
-        textColor = "#757575";
+        textSize = "13sp";
+        textColor = "#075E54";
         layout_weight = "1";
       };
       {
@@ -1160,13 +1181,17 @@ function updatePrivateChatUI(targetUsername)
   
   local data = {}
   local msgs = privateChatHistory[targetUsername] or {}
-  for _, m in ipairs(msgs) do
-    local senderLabel = (m.sender == currentUser.name) and "Me" or m.sender
-    table.insert(data, {
-      msgSender = senderLabel,
-      msgTime = m.time or "",
-      msgText = m.text
-    })
+  if type(msgs) == "table" then
+    for _, m in ipairs(msgs) do
+      if type(m) == "table" then
+        local senderLabel = (m.sender == currentUser.name) and "Me" or (m.sender or targetUsername)
+        table.insert(data, {
+          msgSender = senderLabel,
+          msgTime = m.time or "",
+          msgText = m.text or ""
+        })
+      end
+    end
   end
   
   local adapter = LuaAdapter(activity, data, chatItemLayout)

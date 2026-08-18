@@ -1,7 +1,7 @@
 {
-  "version": "1.1.1",
-  "version_code": 12,
+  "version": "1.1.2",
+  "version_code": 13,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
-  "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 1.1.1: Connected primary Firebase Realtime Database: https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app/"
+  "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%Messenger%20for%20the%20Blind_Updated.xpk",
+  "changelog": "Version 1.1.2: Fixed table.insert type crash & loadlayout setTextStyle/setMargins errors; Redesigned WhatsApp & Facebook Messenger UI."
 }
