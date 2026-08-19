@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.6.0"
-local APP_VERSION_CODE = 39
+local APP_VERSION = "2.7.0"
+local APP_VERSION_CODE = 40
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -863,8 +863,24 @@ end
 -- --------------------------------------------------------------------
 -- ANDROID SCREEN-READER ACCESSIBLE VOICE RECORDING & PLAYBACK ENGINE
 -- --------------------------------------------------------------------
+local currentPlayingMsgHash = ""
+local currentPlayingFilePath = ""
+local activeVoicePlayer = nil
+local activeVoicePlayerDialog = nil
+local btnPlayerPlayPause = nil
+local playerSeekBar = nil
+local txtPlayerTimeTrack = nil
+
+function formatTimeSeconds(seconds)
+  local s = math.floor(tonumber(seconds) or 0)
+  local m = math.floor(s / 60)
+  local sec = s % 60
+  return string.format("%02d:%02d", m, sec)
+end
+
 function downloadAndPlayVoiceNote(msgItem)
   import "android.media.MediaPlayer"
+  import "android.widget.SeekBar"
   
   if not msgItem then return end
   local audioData = msgItem.audio or msgItem.voicePath
@@ -874,16 +890,41 @@ function downloadAndPlayVoiceNote(msgItem)
     return
   end
   
-  local voiceFolder = getAppAudioDir()
   local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", ""):gsub(":", "")
+  
+  -- If this exact voice note is already playing, toggle pause/play
+  if activeVoicePlayer and currentPlayingMsgHash == msgHash then
+    local isPlaying = false
+    pcall(function() isPlaying = activeVoicePlayer.isPlaying() end)
+    if isPlaying then
+      pcall(function() activeVoicePlayer.pause() end)
+      announce("Voice note paused.")
+      if btnPlayerPlayPause then
+        btnPlayerPlayPause.setText("▶️ Play")
+        btnPlayerPlayPause.setContentDescription("Play voice note button")
+      end
+      return
+    else
+      pcall(function() activeVoicePlayer.start() end)
+      announce("Voice note resumed.")
+      if btnPlayerPlayPause then
+        btnPlayerPlayPause.setText("⏸️ Pause")
+        btnPlayerPlayPause.setContentDescription("Pause voice note button")
+      end
+      return
+    end
+  end
+  
+  -- Stop any previous playback
+  stopActiveVoicePlayer()
+  
+  local voiceFolder = getAppAudioDir()
   local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
   local isFileReady = false
   
   pcall(function()
     local fObj = File(targetAudioFile)
-    if fObj.exists() and fObj.length() > 0 then
-      isFileReady = true
-    end
+    if fObj.exists() and fObj.length() > 0 then isFileReady = true end
   end)
 
   if not isFileReady then
@@ -912,34 +953,231 @@ function downloadAndPlayVoiceNote(msgItem)
     isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
   end
   
-  if isFileReady then
-    announce("Playing voice note...")
-    pcall(function()
-      if activeVoicePlayer then
-        pcall(function()
-          if activeVoicePlayer.isPlaying() then activeVoicePlayer.stop() end
-          activeVoicePlayer.release()
-        end)
-        activeVoicePlayer = nil
-      end
-      
-      activeVoicePlayer = MediaPlayer()
-      activeVoicePlayer.reset()
-      activeVoicePlayer.setDataSource(targetAudioFile)
-      activeVoicePlayer.prepare()
-      activeVoicePlayer.start()
-      
-      activeVoicePlayer.setOnCompletionListener(MediaPlayer.OnCompletionListener{
-        onCompletion = function(player)
-          announce("Voice note finished playing.")
-          pcall(function() player.release() end)
-          activeVoicePlayer = nil
-        end
-      })
-    end)
-  else
+  if not isFileReady then
     announce("Failed to decode voice note audio.")
+    return
   end
+  
+  currentPlayingMsgHash = msgHash
+  currentPlayingFilePath = targetAudioFile
+  
+  pcall(function()
+    activeVoicePlayer = MediaPlayer()
+    activeVoicePlayer.reset()
+    activeVoicePlayer.setDataSource(targetAudioFile)
+    activeVoicePlayer.prepare()
+    activeVoicePlayer.start()
+    
+    showVoicePlayerDialog(msgItem)
+    announce("Playing voice note from " .. (msgItem.sender or "User"))
+    
+    activeVoicePlayer.setOnCompletionListener(MediaPlayer.OnCompletionListener{
+      onCompletion = function(player)
+        announce("Voice note finished playing.")
+        stopActiveVoicePlayer()
+      end
+    })
+  end)
+end
+
+function stopActiveVoicePlayer()
+  pcall(function()
+    if activeVoicePlayer then
+      if activeVoicePlayer.isPlaying() then activeVoicePlayer.stop() end
+      activeVoicePlayer.release()
+      activeVoicePlayer = nil
+    end
+  end)
+  currentPlayingMsgHash = ""
+  if activeVoicePlayerDialog then
+    pcall(function() activeVoicePlayerDialog.dismiss() end)
+    activeVoicePlayerDialog = nil
+  end
+end
+
+function showVoicePlayerDialog(msgItem)
+  local sender = msgItem.sender or "User"
+  local totalDurationMs = 0
+  pcall(function()
+    if activeVoicePlayer then totalDurationMs = activeVoicePlayer.getDuration() end
+  end)
+  local totalSec = math.floor(totalDurationMs / 1000)
+  
+  local playerLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "18dp";
+    backgroundColor = "#FFFFFF";
+    {
+      TextView;
+      text = "🎙️ Voice Note from " .. sender;
+      textSize = "17sp";
+      textColor = "#075E54";
+      Typeface = Typeface.DEFAULT_BOLD;
+      gravity = "center";
+      layout_marginBottom = "10dp";
+    };
+    {
+      TextView;
+      id = "txtPlayerTimeTrack";
+      text = "00:00 / " .. formatTimeSeconds(totalSec);
+      textSize = "15sp";
+      textColor = "#333333";
+      gravity = "center";
+      layout_marginBottom = "10dp";
+      ContentDescription = "Voice note duration track";
+    };
+    {
+      SeekBar;
+      id = "playerSeekBar";
+      layout_width = "fill";
+      layout_height = "wrap";
+      max = (totalSec > 0) and totalSec or 100;
+      progress = 0;
+      layout_marginBottom = "16dp";
+      ContentDescription = "Voice seek slider. Drag right to seek forward, drag left to rewind.";
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center";
+      layout_marginBottom = "12dp";
+      {
+        Button;
+        id = "btnPlayerRewind";
+        text = "⏪ -5s";
+        layout_weight = "1";
+        layout_height = "48dp";
+        backgroundColor = "#455A64";
+        textColor = "#FFFFFF";
+        textSize = "14sp";
+        layout_marginRight = "6dp";
+        ContentDescription = "Rewind 5 seconds button";
+      };
+      {
+        Button;
+        id = "btnPlayerPlayPause";
+        text = "⏸️ Pause";
+        layout_weight = "1.5";
+        layout_height = "48dp";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        textSize = "16sp";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Pause or play voice note button";
+      };
+      {
+        Button;
+        id = "btnPlayerForward";
+        text = "⏩ +5s";
+        layout_weight = "1";
+        layout_height = "48dp";
+        backgroundColor = "#455A64";
+        textColor = "#FFFFFF";
+        textSize = "14sp";
+        layout_marginLeft = "6dp";
+        ContentDescription = "Forward 5 seconds button";
+      };
+    };
+    {
+      Button;
+      id = "btnPlayerStopClose";
+      text = "⏹️ Stop & Close";
+      layout_width = "fill";
+      layout_height = "44dp";
+      backgroundColor = "#D32F2F";
+      textColor = "#FFFFFF";
+      textSize = "14sp";
+      ContentDescription = "Stop and close voice player button";
+    };
+  }
+
+  local dialogView = loadlayout(playerLayout)
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Voice Note Player")
+  builder.setView(dialogView)
+  activeVoicePlayerDialog = builder.create()
+  
+  playerSeekBar.setOnSeekBarChangeListener(SeekBar.OnSeekBarChangeListener{
+    onProgressChanged = function(seekBar, progress, fromUser)
+      if fromUser and activeVoicePlayer then
+        local seekMs = progress * 1000
+        pcall(function() activeVoicePlayer.seekTo(seekMs) end)
+        if txtPlayerTimeTrack then
+          txtPlayerTimeTrack.setText(formatTimeSeconds(progress) .. " / " .. formatTimeSeconds(totalSec))
+        end
+        announce("Seek to " .. formatTimeSeconds(progress))
+      end
+    end,
+    onStartTrackingTouch = function(seekBar) end,
+    onStopTrackingTouch = function(seekBar) end
+  })
+
+  btnPlayerPlayPause.onClick = function()
+    if activeVoicePlayer then
+      local isPlaying = false
+      pcall(function() isPlaying = activeVoicePlayer.isPlaying() end)
+      if isPlaying then
+        pcall(function() activeVoicePlayer.pause() end)
+        btnPlayerPlayPause.setText("▶️ Play")
+        btnPlayerPlayPause.setContentDescription("Play voice note button")
+        announce("Voice note paused.")
+      else
+        pcall(function() activeVoicePlayer.start() end)
+        btnPlayerPlayPause.setText("⏸️ Pause")
+        btnPlayerPlayPause.setContentDescription("Pause voice note button")
+        announce("Voice note playing.")
+      end
+    end
+  end
+
+  btnPlayerRewind.onClick = function()
+    if activeVoicePlayer then
+      local currentPos = 0
+      pcall(function() currentPos = activeVoicePlayer.getCurrentPosition() end)
+      local newPos = math.max(0, currentPos - 5000)
+      pcall(function() activeVoicePlayer.seekTo(newPos) end)
+      local newSec = math.floor(newPos / 1000)
+      if playerSeekBar then playerSeekBar.setProgress(newSec) end
+      announce("Rewound 5 seconds. Current time: " .. formatTimeSeconds(newSec))
+    end
+  end
+
+  btnPlayerForward.onClick = function()
+    if activeVoicePlayer then
+      local currentPos = 0
+      pcall(function() currentPos = activeVoicePlayer.getCurrentPosition() end)
+      local newPos = math.min(totalDurationMs, currentPos + 5000)
+      pcall(function() activeVoicePlayer.seekTo(newPos) end)
+      local newSec = math.floor(newPos / 1000)
+      if playerSeekBar then playerSeekBar.setProgress(newSec) end
+      announce("Forwarded 5 seconds. Current time: " .. formatTimeSeconds(newSec))
+    end
+  end
+
+  btnPlayerStopClose.onClick = function()
+    stopActiveVoicePlayer()
+    announce("Voice player closed.")
+  end
+
+  local function updateProgressLoop()
+    if activeVoicePlayer and activeVoicePlayerDialog and activeVoicePlayerDialog.isShowing() then
+      pcall(function()
+        local curMs = activeVoicePlayer.getCurrentPosition()
+        local curSec = math.floor(curMs / 1000)
+        if playerSeekBar then playerSeekBar.setProgress(curSec) end
+        if txtPlayerTimeTrack then
+          txtPlayerTimeTrack.setText(formatTimeSeconds(curSec) .. " / " .. formatTimeSeconds(totalSec))
+        end
+      end)
+      Handler().postDelayed(Runnable{ run = updateProgressLoop }, 500)
+    end
+  end
+  updateProgressLoop()
+
+  activeVoicePlayerDialog.show()
 end
 
 local isVoicePaused = false
