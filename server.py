@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.5.2",
-                "version_code": 37,
+                "version": "2.5.3",
+                "version_code": 38,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.5.2: Fast Startup Splash Screen with Skip Update Button and Dedicated Logout / Switch Account Buttons in Settings."
+                "changelog": "Version 2.5.3: Dynamic Runtime Path Detection (activity.getLuaPath) for Guaranteed In-Place Plugin Updates."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

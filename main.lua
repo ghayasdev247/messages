@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.5.2"
-local APP_VERSION_CODE = 37
+local APP_VERSION = "2.5.3"
+local APP_VERSION_CODE = 38
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -636,25 +636,62 @@ function showDownloadProgressScreen(versionStr, downloadUrl)
 end
 
 function saveUpdateFile(versionStr, uContent)
-  local primaryTarget = "/storage/emulated/0/jieshuo/plugin/AccessibleMessenger/main.lua"
-  
-  local targetPaths = {
-    primaryTarget,
-    "/sdcard/jieshuo/plugin/AccessibleMessenger/main.lua",
-    "/storage/emulated/0/JieShuo/plugin/AccessibleMessenger/main.lua",
-    "/storage/emulated/0/jieshuo/plugin/Accessible Messenger/main.lua",
-    "/sdcard/JieShuo/tools/Chatify Accessible Messenger for the Blind/main.lua",
-    "/sdcard/JieShuo/tools/Accessible Messenger/main.lua",
-    "/storage/emulated/0/Download/Accessible_Messenger_v" .. versionStr .. ".lua",
-    "/sdcard/Download/Accessible_Messenger_v" .. versionStr .. ".lua"
-  }
-  
+  local targetPaths = {}
+  local seen = {}
+
+  local function addPath(p)
+    if p and p ~= "" and p ~= "null" and not seen[p] then
+      seen[p] = true
+      table.insert(targetPaths, p)
+    end
+  end
+
+  -- 1. Exact running script paths from Android / AndroLua runtime
+  pcall(function()
+    if activity and activity.getLuaPath then
+      addPath(tostring(activity.getLuaPath()))
+    end
+  end)
+  pcall(function()
+    if activity and activity.getLuaDir then
+      addPath(tostring(activity.getLuaDir()) .. "/main.lua")
+    end
+  end)
   pcall(function()
     if activity and activity.getFilesDir then
-      table.insert(targetPaths, activity.getFilesDir().getAbsolutePath() .. "/main.lua")
+      addPath(activity.getFilesDir().getAbsolutePath() .. "/main.lua")
     end
   end)
 
+  -- 2. All possible Jieshuo plugin and tool storage directories
+  local jieshuoPrefixes = {
+    "/storage/emulated/0/jieshuo",
+    "/storage/emulated/0/JieShuo",
+    "/sdcard/jieshuo",
+    "/sdcard/JieShuo"
+  }
+  
+  local subFolders = {
+    "/plugin/AccessibleMessenger/main.lua",
+    "/plugin/Accessible Messenger/main.lua",
+    "/plugin/Chatify Accessible Messenger for the Blind/main.lua",
+    "/plugin/Chatify Accessible Messenger for the Blind /main.lua",
+    "/tools/AccessibleMessenger/main.lua",
+    "/tools/Accessible Messenger/main.lua",
+    "/tools/Chatify Accessible Messenger for the Blind/main.lua",
+    "/tools/Chatify Accessible Messenger for the Blind /main.lua"
+  }
+
+  for _, prefix in ipairs(jieshuoPrefixes) do
+    for _, sub in ipairs(subFolders) do
+      addPath(prefix .. sub)
+    end
+  end
+
+  addPath("/storage/emulated/0/Download/Accessible_Messenger_v" .. versionStr .. ".lua")
+  addPath("/sdcard/Download/Accessible_Messenger_v" .. versionStr .. ".lua")
+
+  local successCount = 0
   for _, path in ipairs(targetPaths) do
     pcall(function()
       local fileObj = File(path)
@@ -662,13 +699,16 @@ function saveUpdateFile(versionStr, uContent)
       if parentFolder and not parentFolder.exists() then
         parentFolder.mkdirs()
       end
-      local f = io.open(path, "w")
+      local f = io.open(path, "wb")
       if f then
         f:write(uContent)
+        f:flush()
         f:close()
+        successCount = successCount + 1
       end
     end)
   end
+  return successCount
 end
 
 -- --------------------------------------------------------------------
