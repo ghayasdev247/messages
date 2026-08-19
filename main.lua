@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.3.1 (Build Code: 31)
--- Features: 100% Unique Online User Presence, Unique Multi-Select Add Members,
---           Group & Message Deduplication, Permanent Voice Labels & 5-Tab Bar
+-- Version: 2.4.0 (Build Code: 32)
+-- Features: Startup Splash Screen, Live Interactive Update Dialog with Progress,
+--           Guaranteed Group Member Sync, and Global Messenger Group Settings
 -- ====================================================================
 
 require "import"
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.3.1"
-local APP_VERSION_CODE = 31
+local APP_VERSION = "2.4.0"
+local APP_VERSION_CODE = 32
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -43,6 +43,8 @@ local activeTab = "home" -- "home", "lounge", "public", "private", "you"
 local activeChatTarget = ""
 local activeGroup = nil
 local isPolling = false
+
+local mutedGroups = {} -- groupId -> boolean
 
 local lastPublicMessageCount = 0
 local lastPrivateMessageCount = 0
@@ -491,44 +493,28 @@ function commitGitHubFile(filePath, newTableData, commitMessage, callback)
 end
 
 -- --------------------------------------------------------------------
--- STORAGE & REMOTE UPDATE ENGINE
+-- AUTO UPDATE ENGINE WITH LIVE PROGRESS
 -- --------------------------------------------------------------------
 function checkForRemoteUpdates(manualCheck)
   if manualCheck then
     announce("Checking for updates...")
   end
   
-  Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
-    if lCode == 200 then
-      local manifest = decodeJSON(lContent)
+  local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
+  Http.get(checkUrl, function(code, content)
+    if code == 200 then
+      local manifest = decodeJSON(content)
       if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
-        local versionStr = manifest.version or tostring(manifest.version_code)
-        announce("Downloading update Version " .. versionStr .. " from Local Server...")
-        Http.get(BACKEND_URL .. "/api/download-lua", function(uCode, uContent)
-          if uCode == 200 and uContent and uContent ~= "" then
-            saveUpdateFile(versionStr, uContent)
-            return
-          end
-        end)
+        showUpdateAvailableDialog(manifest)
         return
       end
     end
     
-    local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
-    Http.get(checkUrl, function(code, content)
-      if code == 200 then
-        local manifest = decodeJSON(content)
+    Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
+      if lCode == 200 then
+        local manifest = decodeJSON(lContent)
         if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
-          local versionStr = manifest.version or tostring(manifest.version_code)
-          announce("Downloading update Version " .. versionStr .. " from GitHub...")
-          local updateUrl = (manifest.download_url or LUA_UPDATE_URL) .. "?t=" .. os.time()
-          Http.get(updateUrl, function(uCode, uContent)
-            if uCode == 200 and uContent and uContent ~= "" then
-              saveUpdateFile(versionStr, uContent)
-            else
-              announce("Failed to download update script from GitHub.")
-            end
-          end)
+          showUpdateAvailableDialog(manifest)
           return
         end
       end
@@ -537,6 +523,102 @@ function checkForRemoteUpdates(manualCheck)
         announce("You are using the latest version of Accessible Messenger (v" .. APP_VERSION .. ").")
       end
     end)
+  end)
+end
+
+function showUpdateAvailableDialog(manifest)
+  local newVer = manifest.version or tostring(manifest.version_code)
+  local changelog = manifest.changelog or "Bug fixes and performance improvements."
+  local downloadUrl = manifest.download_url or LUA_UPDATE_URL
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("⚡ Update Available: Version " .. newVer)
+  builder.setMessage("A new update is available!\n\nChangelog:\n" .. changelog .. "\n\nDo you want to update now?")
+  builder.setPositiveButton("Update Now (Yes)", DialogInterface.OnClickListener{
+    onClick = function(dialog, which)
+      showDownloadProgressScreen(newVer, downloadUrl)
+    end
+  })
+  builder.setNegativeButton("Later (No)", DialogInterface.OnClickListener{
+    onClick = function(dialog, which)
+      announce("Update postponed.")
+      if activeTab == "splash" then
+        proceedAfterSplash()
+      end
+    end
+  })
+  builder.setCancelable(false)
+  builder.show()
+  announce("Update available for Version " .. newVer .. ". Tap Update Now to proceed.")
+end
+
+function showDownloadProgressScreen(versionStr, downloadUrl)
+  local downloadLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    gravity = "center";
+    padding = "24dp";
+    backgroundColor = "#F4F6F9";
+    {
+      TextView;
+      text = "⬇️ Updating Accessible Messenger";
+      textSize = "22sp";
+      textColor = "#075E54";
+      Typeface = Typeface.DEFAULT_BOLD;
+      gravity = "center";
+    };
+    {
+      TextView;
+      id = "txtDownloadStatus";
+      text = "Downloading update v" .. versionStr .. " in background...\nPlease wait.";
+      textSize = "15sp";
+      textColor = "#555555";
+      gravity = "center";
+      layout_marginTop = "14dp";
+      layout_marginBottom = "24dp";
+    };
+    {
+      ProgressBar;
+      layout_width = "fill";
+      layout_height = "wrap";
+      style = android.R.attr.progressBarStyleHorizontal;
+      indeterminate = true;
+    };
+    {
+      Button;
+      id = "btnContinueAfterUpdate";
+      text = "Continue to Messenger";
+      layout_width = "fill";
+      layout_height = "48dp";
+      layout_marginTop = "24dp";
+      backgroundColor = "#075E54";
+      textColor = "#FFFFFF";
+      visibility = View.GONE;
+    };
+  }
+
+  activity.setContentView(loadlayout(downloadLayout))
+  announce("Downloading update Version " .. versionStr .. " in background. Please wait...")
+
+  Http.get(downloadUrl .. "?t=" .. os.time(), function(uCode, uContent)
+    if uCode == 200 and uContent and uContent ~= "" then
+      saveUpdateFile(versionStr, uContent)
+      if txtDownloadStatus then
+        txtDownloadStatus.setText("✅ Update Finished!\nVersion " .. versionStr .. " downloaded successfully.\nRe-import plugin in Jieshuo to apply changes.")
+      end
+      if btnContinueAfterUpdate then
+        btnContinueAfterUpdate.setVisibility(View.VISIBLE)
+        btnContinueAfterUpdate.onClick = function()
+          proceedAfterSplash()
+        end
+      end
+      announce("Update Finished! Version " .. versionStr .. " downloaded successfully.")
+    else
+      announce("Update download failed. Continuing to messenger.")
+      proceedAfterSplash()
+    end
   end)
 end
 
@@ -573,8 +655,6 @@ function saveUpdateFile(versionStr, uContent)
       end
     end)
   end
-  
-  announce("Update v" .. versionStr .. " successful! Saved to Download folder: " .. fileName .. ". Re-import plugin in Jieshuo to apply.")
 end
 
 -- --------------------------------------------------------------------
@@ -986,6 +1066,94 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGrou
     end
   })
   builder.show()
+end
+
+-- --------------------------------------------------------------------
+-- 0. STARTUP SPLASH / LOADING SCREEN
+-- --------------------------------------------------------------------
+function showSplashScreen()
+  activeTab = "splash"
+  
+  local splashLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    gravity = "center";
+    padding = "24dp";
+    backgroundColor = "#075E54";
+    {
+      TextView;
+      text = "Accessible Messenger";
+      textSize = "28sp";
+      textColor = "#FFFFFF";
+      Typeface = Typeface.DEFAULT_BOLD;
+      gravity = "center";
+      ContentDescription = "Accessible Messenger Application";
+    };
+    {
+      TextView;
+      id = "txtSplashSubtitle";
+      text = "Version " .. APP_VERSION .. "\n\nChecking for updates and connecting...";
+      textSize = "16sp";
+      textColor = "#E0F2F1";
+      gravity = "center";
+      layout_marginTop = "14dp";
+      layout_marginBottom = "24dp";
+    };
+    {
+      ProgressBar;
+      id = "splashProgressBar";
+      layout_width = "wrap";
+      layout_height = "wrap";
+    };
+  }
+
+  activity.setContentView(loadlayout(splashLayout))
+  announce("Accessible Messenger starting up, checking for updates...")
+  
+  -- Check for updates on startup
+  local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
+  Http.get(checkUrl, function(code, content)
+    if code == 200 then
+      local manifest = decodeJSON(content)
+      if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
+        showUpdateAvailableDialog(manifest)
+        return
+      end
+    end
+    
+    Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
+      if lCode == 200 then
+        local manifest = decodeJSON(lContent)
+        if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
+          showUpdateAvailableDialog(manifest)
+          return
+        end
+      end
+      
+      -- No update, proceed directly to login/home
+      Handler().postDelayed(Runnable{
+        run = function()
+          proceedAfterSplash()
+        end
+      }, 1000)
+    end)
+  end)
+end
+
+function proceedAfterSplash()
+  local savedAccount = loadSavedCredentials()
+  if savedAccount and savedAccount.username and savedAccount.username ~= "" then
+    currentUser.name = savedAccount.username
+    currentUser.online = true
+    announce("Connected as saved user " .. savedAccount.username)
+    showMainAppContainer()
+    switchTab("home")
+    startPollingLoop()
+  else
+    showLoginScreen()
+  end
 end
 
 -- --------------------------------------------------------------------
@@ -1652,18 +1820,48 @@ function showCreateGroupDialog()
       table.insert(groupsList, 1, newGroupObj)
       updateLoungeGroupsUI()
       
-      postFirebaseData("data/groups", newGroupObj, function() end)
-      fetchGitHubFile("data/groups.json", function(ok, currentList)
-        local list = currentList or {}
-        table.insert(list, 1, newGroupObj)
-        commitGitHubFile("data/groups.json", list, "Created group: " .. name, function()
-          announce("Group \"" .. name .. "\" created and live!")
-        end)
+      saveGroupToCloud(newGroupObj, "Created group: " .. name, function()
+        announce("Group \"" .. name .. "\" created and live!")
       end)
     end
   })
   builder.setNegativeButton("Cancel", nil)
   builder.show()
+end
+
+function saveGroupToCloud(groupObj, commitMsg, callback)
+  -- 1. Update in local groupsList
+  for i, g in ipairs(groupsList) do
+    if g.id == groupObj.id or g.name == groupObj.name then
+      groupsList[i] = groupObj
+      break
+    end
+  end
+  
+  -- 2. Post to Firebase group path
+  postFirebaseData("data/groups/" .. groupObj.id, groupObj, function() end)
+  
+  -- 3. Post to Firebase all groups
+  postFirebaseData("data/groups", groupObj, function() end)
+  
+  -- 4. Commit to GitHub
+  fetchGitHubFile("data/groups.json", function(ok, currentList)
+    local list = currentList or {}
+    local found = false
+    for i, g in ipairs(list) do
+      if g.id == groupObj.id or g.name == groupObj.name then
+        list[i] = groupObj
+        found = true
+        break
+      end
+    end
+    if not found then
+      table.insert(list, 1, groupObj)
+    end
+    commitGitHubFile("data/groups.json", list, commitMsg or ("Update group " .. (groupObj.name or "")), function(cOk)
+      if callback then callback(cOk) end
+    end)
+  end)
 end
 
 function fetchGroupsList()
@@ -1781,15 +1979,13 @@ function updateLoungeGroupsUI()
 end
 
 -- --------------------------------------------------------------------
--- GROUP CHAT ROOM CONTROLLER
+-- GROUP CHAT ROOM & GLOBAL MESSENGER SETTINGS
 -- --------------------------------------------------------------------
 function openGroupChatScreen(groupObj)
   activeGroup = groupObj
   activeTab = "group_chat"
   lastGroupMessageCount = 0
   lastRenderedGroupCount = -1
-  
-  local isCreator = string.lower(tostring(groupObj.creator or "")) == string.lower(currentUser.name)
   
   local groupChatLayout = {
     LinearLayout;
@@ -1826,11 +2022,10 @@ function openGroupChatScreen(groupObj)
       {
         Button;
         id = "btnGroupSettings";
-        text = "⚙️ Admin";
+        text = "⚙️ Settings";
         textColor = "#FFFFFF";
         backgroundColor = "#00796B";
-        visibility = isCreator and View.VISIBLE or View.GONE;
-        ContentDescription = "Group Admin Settings";
+        ContentDescription = "Group Settings and Members";
       };
     };
     {
@@ -1892,7 +2087,7 @@ function openGroupChatScreen(groupObj)
   
   if btnGroupSettings then
     btnGroupSettings.onClick = function()
-      showGroupAdminSettingsDialog(groupObj)
+      showGlobalGroupSettingsDialog(groupObj)
     end
   end
   
@@ -1921,36 +2116,229 @@ function openGroupChatScreen(groupObj)
   end
 end
 
-function showGroupAdminSettingsDialog(groupObj)
+function showGlobalGroupSettingsDialog(groupObj)
+  local isCreator = string.lower(tostring(groupObj.creator or "")) == string.lower(currentUser.name)
+  local memberCount = (type(groupObj.members) == "table") and #groupObj.members or 1
+  local isMuted = (mutedGroups[groupObj.id] == true)
+  
   local options = {
-    "👥 Add Online Members to Group",
-    groupObj.isPublic and "🔒 Set Group to Unlisted (Private)" or "🌐 Set Group to Public",
-    groupObj.requireApproval and "🔓 Disable Member Approval" or "🔐 Enable Member Approval",
-    "🗑️ Delete Group"
+    "👥 View All Group Members (" .. memberCount .. " members)",
+    "➕ Add Online Members to Group",
+    isMuted and "🔔 Unmute Group Notifications" or "🔇 Mute Group Notifications",
+    "📥 Save & Export Group Chat History"
   }
   
+  if isCreator then
+    table.insert(options, "🚫 Remove a Member (Kick)")
+    table.insert(options, "👑 Transfer Admin Role")
+    table.insert(options, "✏️ Edit Group Name & Description")
+    table.insert(options, groupObj.isPublic and "🔒 Set Group to Unlisted (Private)" or "🌐 Set Group to Public")
+    table.insert(options, groupObj.requireApproval and "🔓 Disable Member Approval" or "🔐 Enable Member Approval")
+    table.insert(options, "🗑️ Delete Group Permanently")
+  else
+    table.insert(options, "🚪 Leave Group")
+  end
+
   local builder = AlertDialog.Builder(activity)
-  builder.setTitle("Group Admin Settings: " .. (groupObj.name or "Group"))
+  builder.setTitle("⚙️ Group Settings: " .. (groupObj.name or "Group"))
   builder.setItems(options, DialogInterface.OnClickListener{
     onClick = function(d, w)
-      if w == 0 then
+      local choice = options[w + 1]
+      
+      if string.find(choice, "View All Group Members") then
+        showGroupMembersListDialog(groupObj)
+      elseif string.find(choice, "Add Online Members") then
         showAddMembersDialog(groupObj)
-      elseif w == 1 then
+      elseif string.find(choice, "Mute Group") then
+        mutedGroups[groupObj.id] = true
+        announce("Group notifications muted.")
+      elseif string.find(choice, "Unmute Group") then
+        mutedGroups[groupObj.id] = false
+        announce("Group notifications unmuted.")
+      elseif string.find(choice, "Export Group Chat") then
+        local msgs = groupChatHistory[groupObj.id] or {}
+        saveChatLocally("GroupChat", groupObj.name or groupObj.id, msgs)
+      elseif string.find(choice, "Remove a Member") then
+        showRemoveMemberDialog(groupObj)
+      elseif string.find(choice, "Transfer Admin") then
+        showTransferAdminDialog(groupObj)
+      elseif string.find(choice, "Edit Group Name") then
+        showEditGroupInfoDialog(groupObj)
+      elseif string.find(choice, "Set Group to Unlisted") or string.find(choice, "Set Group to Public") then
         groupObj.isPublic = not groupObj.isPublic
-        postFirebaseData("data/groups", groupObj, function() end)
-        announce("Group visibility updated to " .. (groupObj.isPublic and "Public" or "Unlisted"))
-      elseif w == 2 then
+        saveGroupToCloud(groupObj, "Updated visibility for " .. groupObj.name, function()
+          announce("Group visibility changed to " .. (groupObj.isPublic and "Public" or "Unlisted"))
+        end)
+      elseif string.find(choice, "Disable Member Approval") or string.find(choice, "Enable Member Approval") then
         groupObj.requireApproval = not groupObj.requireApproval
-        postFirebaseData("data/groups", groupObj, function() end)
-        announce("Join approval updated to " .. (groupObj.requireApproval and "Required" or "Open"))
-      elseif w == 3 then
+        saveGroupToCloud(groupObj, "Updated approval for " .. groupObj.name, function()
+          announce("Join approval updated to " .. (groupObj.requireApproval and "Required" or "Open"))
+        end)
+      elseif string.find(choice, "Delete Group") then
         postFirebaseData("data/groups/" .. groupObj.id, {}, function() end)
-        announce("Group deleted.")
+        for i, g in ipairs(groupsList) do
+          if g.id == groupObj.id then table.remove(groupsList, i) break end
+        end
+        announce("Group deleted permanently.")
         showMainAppContainer()
         switchTab("lounge")
+      elseif string.find(choice, "Leave Group") then
+        if type(groupObj.members) == "table" then
+          for i, m in ipairs(groupObj.members) do
+            if string.lower(tostring(m)) == string.lower(currentUser.name) then
+              table.remove(groupObj.members, i)
+              break
+            end
+          end
+        end
+        saveGroupToCloud(groupObj, currentUser.name .. " left group " .. groupObj.name, function()
+          announce("You left " .. (groupObj.name or "group"))
+          showMainAppContainer()
+          switchTab("lounge")
+        end)
       end
     end
   })
+  builder.show()
+end
+
+function showGroupMembersListDialog(groupObj)
+  local members = groupObj.members or { currentUser.name }
+  local displayList = {}
+  for _, m in ipairs(members) do
+    local isLead = (string.lower(tostring(m)) == string.lower(tostring(groupObj.creator or "")))
+    local role = isLead and "👑 Group Creator & Admin" or "👤 Member"
+    table.insert(displayList, tostring(m) .. " - " .. role)
+  end
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Members of " .. (groupObj.name or "Group") .. " (" .. #members .. ")")
+  builder.setItems(displayList, nil)
+  builder.setPositiveButton("Close", nil)
+  builder.show()
+end
+
+function showRemoveMemberDialog(groupObj)
+  local members = groupObj.members or {}
+  local removable = {}
+  for _, m in ipairs(members) do
+    if string.lower(tostring(m)) ~= string.lower(currentUser.name) then
+      table.insert(removable, tostring(m))
+    end
+  end
+  
+  if #removable == 0 then
+    announce("No other members in this group to remove.")
+    return
+  end
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Select Member to Remove")
+  builder.setItems(removable, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local target = removable[w + 1]
+      for i, m in ipairs(groupObj.members) do
+        if string.lower(tostring(m)) == string.lower(target) then
+          table.remove(groupObj.members, i)
+          break
+        end
+      end
+      saveGroupToCloud(groupObj, "Removed member " .. target .. " from " .. groupObj.name, function()
+        announce("Removed " .. target .. " from group.")
+      end)
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
+end
+
+function showTransferAdminDialog(groupObj)
+  local members = groupObj.members or {}
+  local candidates = {}
+  for _, m in ipairs(members) do
+    if string.lower(tostring(m)) ~= string.lower(currentUser.name) then
+      table.insert(candidates, tostring(m))
+    end
+  end
+  
+  if #candidates == 0 then
+    announce("No other members available to transfer admin role.")
+    return
+  end
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Select New Group Admin")
+  builder.setItems(candidates, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local newAdmin = candidates[w + 1]
+      groupObj.creator = newAdmin
+      saveGroupToCloud(groupObj, "Transferred admin of " .. groupObj.name .. " to " .. newAdmin, function()
+        announce("Admin role transferred to " .. newAdmin .. "!")
+      end)
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
+end
+
+function showEditGroupInfoDialog(groupObj)
+  local layout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "16dp";
+    {
+      TextView;
+      text = "Edit Group Name:";
+      textSize = "14sp";
+      textColor = "#222222";
+    };
+    {
+      EditText;
+      id = "editEditGroupName";
+      text = groupObj.name or "";
+      layout_width = "fill";
+      textSize = "15sp";
+      padding = "10dp";
+      backgroundColor = "#EEEEEE";
+      layout_marginBottom = "10dp";
+    };
+    {
+      TextView;
+      text = "Edit Description / Topic:";
+      textSize = "14sp";
+      textColor = "#222222";
+    };
+    {
+      EditText;
+      id = "editEditGroupDesc";
+      text = groupObj.desc or "";
+      layout_width = "fill";
+      textSize = "15sp";
+      padding = "10dp";
+      backgroundColor = "#EEEEEE";
+    };
+  }
+  
+  local view = loadlayout(layout)
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Edit Group Info")
+  builder.setView(view)
+  builder.setPositiveButton("Save Changes", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local newName = editEditGroupName.getText().toString()
+      local newDesc = editEditGroupDesc.getText().toString()
+      if newName ~= "" then
+        groupObj.name = newName
+        groupObj.desc = newDesc
+        saveGroupToCloud(groupObj, "Updated group info for " .. newName, function()
+          announce("Group info updated successfully!")
+          if txtGroupChatHeader then txtGroupChatHeader.setText(newName) end
+        end)
+      end
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
   builder.show()
 end
 
@@ -2019,7 +2407,7 @@ function showAddMembersDialog(groupObj)
     end
     
     local builder = AlertDialog.Builder(activity)
-    builder.setTitle("Add Online Members")
+    builder.setTitle("Add Online Members to " .. (groupObj.name or "Group"))
     builder.setMultiChoiceItems(namesArray, checkedArray, DialogInterface.OnMultiChoiceClickListener{
       onClick = function(dialog, which, isChecked)
         local uName = namesArray[which + 1]
@@ -2040,18 +2428,9 @@ function showAddMembersDialog(groupObj)
         end
         
         if addedCount > 0 then
-          postFirebaseData("data/groups", groupObj, function() end)
-          fetchGitHubFile("data/groups.json", function(ok, currentList)
-            local list = currentList or {}
-            for i, g in ipairs(list) do
-              if g.id == groupObj.id or g.name == groupObj.name then
-                list[i] = groupObj
-                break
-              end
-            end
-            commitGitHubFile("data/groups.json", list, "Added " .. addedCount .. " members to " .. (groupObj.name or "group"), function() end)
+          saveGroupToCloud(groupObj, "Added " .. addedCount .. " members to " .. (groupObj.name or "group"), function()
+            announce("Successfully added " .. addedCount .. " member(s) to " .. (groupObj.name or "Group") .. "!")
           end)
-          announce("Added " .. addedCount .. " member(s) to " .. (groupObj.name or "Group") .. "!")
         else
           announce("No members selected.")
         end
@@ -2070,7 +2449,7 @@ function fetchGroupChatThread(groupId)
     if success and data and type(data) == "table" then
       local sorted = deduplicateAndSortMessages(data)
       local newCount = #sorted
-      if newCount > lastGroupMessageCount and lastGroupMessageCount > 0 then
+      if newCount > lastGroupMessageCount and lastGroupMessageCount > 0 and (mutedGroups[groupId] ~= true) then
         local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
           announce("New message in " .. (activeGroup and activeGroup.name or "group") .. " from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
@@ -3011,6 +3390,6 @@ function startPollingLoop()
 end
 
 -- --------------------------------------------------------------------
--- INITIAL ENTRY POINT
+-- INITIAL ENTRY POINT: STARTUP SPLASH SCREEN & AUTO-UPDATE TEST
 -- --------------------------------------------------------------------
-showLoginScreen()
+showSplashScreen()
