@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.0.0",
-                "version_code": 25,
+                "version": "2.1.0",
+                "version_code": 26,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.0.0: 5-Tab Navigation Architecture, Remember Me Permanent Accounts, and Groups Lounge with Admin Approval & Privacy Controls."
+                "changelog": "Version 2.1.0: Active Ghost User Cloud Purge (35s), Instant Group Visibility, Jieshuo Smooth UI Signature Guard & Accessible Vertical ListView."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

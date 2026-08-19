@@ -1,10 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.0.0 (Build Code: 25)
--- Features: 5-Tab Bottom Navigation, Remember Me Permanent Accounts,
---           Groups Lounge with Admin Approval & Privacy Controls,
---           HD AAC Voice Engine, Scoped-Storage Safe Audio Pipeline
+-- Version: 2.1.0 (Build Code: 26)
+-- Features: Active Ghost User Cloud Purge (35s Threshold), Instant Group Creation & Visibility,
+--           Jieshuo Smooth UI Signature Guard, Accessible Vertical ListView & 5-Tab Bar
 -- ====================================================================
 
 require "import"
@@ -22,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.0.0"
-local APP_VERSION_CODE = 25
+local APP_VERSION = "2.1.0"
+local APP_VERSION_CODE = 26
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -51,6 +50,7 @@ local lastGroupMessageCount = 0
 local lastRenderedPublicCount = -1
 local lastRenderedPrivateCount = -1
 local lastRenderedGroupCount = -1
+local lastRenderedUsersSignature = ""
 local lastHeartbeatTime = 0
 
 -- Audio Recording Global State
@@ -68,7 +68,7 @@ local groupChatHistory = {}
 local groupSearchQuery = ""
 
 -- --------------------------------------------------------------------
--- STORAGE DIRECTORY RESOLVER (100% Android Scoped Storage Safe)
+-- STORAGE DIRECTORY RESOLVER
 -- --------------------------------------------------------------------
 function getAppAudioDir()
   local dir = "/sdcard/Download/Accessible_Messenger_Voice"
@@ -696,24 +696,8 @@ function apiPost(endpoint, payload, callback)
     if username and username ~= "" then
       local now_ts = os.time()
       local userObj = { name = username, last_seen = now_ts, status = "Online" }
-      postFirebaseData("data/online_users", userObj, function() end)
+      postFirebaseData("data/online_users/" .. username, userObj, function() end)
       Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-      fetchGitHubFile("data/online_users.json", function(ok, userList)
-        local list = userList or {}
-        local found = false
-        for _, u in ipairs(list) do
-          if u.name == username then
-            u.last_seen = now_ts
-            u.status = "Online"
-            found = true
-            break
-          end
-        end
-        if not found then
-          table.insert(list, userObj)
-        end
-        commitGitHubFile("data/online_users.json", list, "Presence: " .. username, callback)
-      end)
     else
       if callback then callback(false) end
     end
@@ -841,6 +825,7 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
         mediaRecorder.start()
         isRecordingVoice = true
         btnWidget.setText("⏹️")
+        btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
         announce("Recording voice note. Speak now, then tap to stop and send.")
       end)
     end
@@ -1489,11 +1474,20 @@ function createLoungeTabView()
       };
       {
         Button;
+        id = "btnRefreshGroups";
+        text = "🔄 Refresh";
+        textSize = "13sp";
+        backgroundColor = "#128C7E";
+        textColor = "#FFFFFF";
+      };
+      {
+        Button;
         id = "btnCreateGroupModal";
         text = "➕ Create Group";
         textSize = "13sp";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
+        layout_marginLeft = "4dp";
       };
     };
     {
@@ -1516,6 +1510,13 @@ function createLoungeTabView()
   }
   
   local view = loadlayout(viewLayout)
+  
+  if btnRefreshGroups then
+    btnRefreshGroups.onClick = function()
+      announce("Refreshing community groups list...")
+      fetchGroupsList()
+    end
+  end
   
   if btnCreateGroupModal then
     btnCreateGroupModal.onClick = function()
@@ -1620,12 +1621,15 @@ function showCreateGroupDialog()
         created_at = os.time()
       }
       
+      table.insert(groupsList, 1, newGroupObj)
+      updateLoungeGroupsUI()
+      
       postFirebaseData("data/groups/" .. newGroupObj.id, newGroupObj, function() end)
       fetchGitHubFile("data/groups.json", function(ok, currentList)
         local list = currentList or {}
         table.insert(list, newGroupObj)
         commitGitHubFile("data/groups.json", list, "Created group: " .. name, function()
-          announce("Group \"" .. name .. "\" created successfully!")
+          announce("Group \"" .. name .. "\" created and live!")
           fetchGroupsList()
         end)
       end)
@@ -1839,7 +1843,6 @@ function openGroupChatScreen(groupObj)
   end
   
   setupHoldToRecordVoiceButton(btnRecordGroupVoice, false, groupObj.id, true)
-  
   fetchGroupChatThread(groupObj.id)
   
   btnSendGroupMessage.onClick = function()
@@ -2218,16 +2221,17 @@ function updatePublicFeedUI()
 end
 
 -- --------------------------------------------------------------------
--- TAB 4: PRIVATE LOBBY VIEW
+-- TAB 4: PRIVATE LOBBY VIEW (ACCESSIBLE VERTICAL LISTVIEW)
 -- --------------------------------------------------------------------
 function createPrivateTabView()
+  lastRenderedUsersSignature = ""
   local viewLayout = {
     LinearLayout;
     orientation = "vertical";
     layout_width = "fill";
     layout_height = "fill";
-    padding = "16dp";
-    backgroundColor = "#FFFFFF";
+    padding = "14dp";
+    backgroundColor = "#F4F6F9";
     {
       LinearLayout;
       orientation = "horizontal";
@@ -2245,7 +2249,10 @@ function createPrivateTabView()
       {
         Button;
         id = "btnRefreshUsers";
-        text = "Refresh";
+        text = "🔄 Refresh";
+        textSize = "13sp";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
       };
     };
     {
@@ -2253,7 +2260,7 @@ function createPrivateTabView()
       id = "listOnlineUsers";
       layout_width = "fill";
       layout_height = "fill";
-      dividerHeight = "2dp";
+      dividerHeight = "4dp";
     };
   }
   
@@ -2278,13 +2285,18 @@ function fetchOnlineUsersList()
         if type(u) == "table" then
           local name = u.name or u.username
           local lastSeen = tonumber(u.last_seen or 0) or 0
-          local isOnline = (now_ts - lastSeen <= 60) and (u.status == "Online" or u.online == true)
+          local isOnline = (now_ts - lastSeen <= 35) and (u.status == "Online" or u.online == true)
           
-          if name and name ~= currentUser.name and isOnline then
-            table.insert(filtered, {
-              name = name,
-              status = "Online"
-            })
+          if name and name ~= currentUser.name then
+            if isOnline then
+              table.insert(filtered, {
+                name = name,
+                status = "Online"
+              })
+            else
+              -- Active Ghost User Purge from Firebase Server
+              postFirebaseData("data/online_users/" .. name, {}, function() end)
+            end
           end
         end
       end
@@ -2299,25 +2311,48 @@ end
 function updatePrivateDirectoryUI()
   if not listOnlineUsers then return end
   
+  local currentSig = ""
+  for _, u in ipairs(onlineUsersList) do
+    currentSig = currentSig .. ";" .. (u.name or "")
+  end
+  if currentSig == lastRenderedUsersSignature and #onlineUsersList > 0 then
+    return -- No change; skip setAdapter to prevent Jieshuo lag
+  end
+  lastRenderedUsersSignature = currentSig
+  
   local itemLayout = {
     LinearLayout;
-    orientation = "horizontal";
+    orientation = "vertical";
     layout_width = "fill";
-    padding = "16dp";
-    gravity = "center_vertical";
+    padding = "14dp";
+    backgroundColor = "#FFFFFF";
     {
-      TextView;
-      id = "itemName";
-      textSize = "18sp";
-      textColor = "#000000";
-      Typeface = Typeface.DEFAULT_BOLD;
-      layout_weight = "1";
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      {
+        TextView;
+        id = "itemName";
+        textSize = "17sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "itemStatus";
+        textSize = "13sp";
+        textColor = "#2E7D32";
+        Typeface = Typeface.DEFAULT_BOLD;
+      };
     };
     {
       TextView;
-      id = "itemStatus";
-      textSize = "14sp";
-      textColor = "#388E3C";
+      text = "Tap to open private 1-on-1 chat room";
+      textSize = "12sp";
+      textColor = "#777777";
+      paddingTop = "4dp";
     };
   }
   
@@ -2326,7 +2361,7 @@ function updatePrivateDirectoryUI()
     if type(u) == "table" then
       table.insert(data, { 
         itemName = u.name or "User", 
-        itemStatus = "● Online"
+        itemStatus = "● Active Now"
       })
     end
   end
@@ -2729,7 +2764,7 @@ function createYouTabView()
   
   if btnLogoutAndForget then
     btnLogoutAndForget.onClick = function()
-      purgeCloudFeed("data/online_users.json")
+      postFirebaseData("data/online_users/" .. currentUser.name, {}, function() end)
       purgeEphemeralAudioFiles()
       clearSavedCredentials()
       currentUser.name = ""
@@ -2774,7 +2809,7 @@ function startPollingLoop()
       fetchPrivateChatThread(activeChatTarget)
     end
     
-    Handler().postDelayed(Runnable{ run = poll }, 2500)
+    Handler().postDelayed(Runnable{ run = poll }, 4000)
   end
   
   poll()

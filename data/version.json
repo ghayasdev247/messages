@@ -1,7 +1,7 @@
 {
-  "version": "2.0.0",
-  "version_code": 25,
+  "version": "2.1.0",
+  "version_code": 26,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 2.0.0: 5-Tab Navigation Architecture, Remember Me Permanent Accounts, and Groups Lounge with Admin Approval & Privacy Controls."
+  "changelog": "Version 2.1.0: Active Ghost User Cloud Purge (35s), Instant Group Visibility, Jieshuo Smooth UI Signature Guard & Accessible Vertical ListView."
 }
