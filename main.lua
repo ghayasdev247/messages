@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.4.0 (Build Code: 32)
--- Features: Startup Splash Screen, Live Interactive Update Dialog with Progress,
---           Guaranteed Group Member Sync, and Global Messenger Group Settings
+-- Version: 2.4.1 (Build Code: 33)
+-- Features: Eliminated Chinese Surrogate Characters on Voice Notes,
+--           Startup Splash Screen, Live Interactive Updates, Group Sync & Controls
 -- ====================================================================
 
 require "import"
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.4.0"
-local APP_VERSION_CODE = 32
+local APP_VERSION = "2.4.1"
+local APP_VERSION_CODE = 33
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -258,8 +258,22 @@ function decodeBase64ToAudioFile(b64Data, targetPath)
 end
 
 -- --------------------------------------------------------------------
--- MESSAGE DEDUPLICATION & CHRONOLOGICAL SORTING ENGINE
+-- MESSAGE TEXT SANITIZER & DEDUPLICATION ENGINE
 -- --------------------------------------------------------------------
+function cleanMessageText(text, isVoice)
+  if isVoice or (text and string.find(text, "Voice")) then
+    return "[Voice Note] - Tap to play"
+  end
+  if not text or text == "" then return "" end
+  
+  -- Strip corrupted Chinese surrogate bytes from old emoji encoding
+  local clean = text:gsub("馃帳", ""):gsub("馃懇", ""):gsub("馃", ""):gsub("[\128-\255]+Voice", "Voice")
+  if clean == "" or string.find(clean, "Voice Message") or string.find(clean, "Voice Note") then
+    return "[Voice Note] - Tap to play"
+  end
+  return clean
+end
+
 function deduplicateAndSortMessages(msgList)
   if type(msgList) ~= "table" then return {} end
   local cleanList = {}
@@ -408,7 +422,7 @@ function saveChatLocally(chatType, targetName, messagesList)
       if type(m) == "table" then
         local sender = m.sender or "Anonymous"
         local timeStr = m.time or ""
-        local text = m.text or ""
+        local text = cleanMessageText(m.text, (m.isVoice == true) or (m.audio and m.audio ~= ""))
         local rx = (m.reaction and m.reaction ~= "") and (" [Reaction: " .. m.reaction .. "]") or ""
         table.insert(contentLines, string.format("[%s] %s: %s%s", timeStr, sender, text, rx))
       end
@@ -736,7 +750,7 @@ function apiPost(endpoint, payload, callback)
   if string.find(endpoint, "/api/public%-feed") then
     local msgObj = {
       sender = payload.sender or currentUser.name,
-      text = payload.text,
+      text = payload.text or "[Voice Message]",
       isVoice = payload.isVoice,
       audio = payload.audio,
       time = payload.time or os.date("%I:%M %p"),
@@ -754,7 +768,7 @@ function apiPost(endpoint, payload, callback)
     local msgObj = {
       sender = payload.sender or currentUser.name,
       recipient = payload.recipient,
-      text = payload.text,
+      text = payload.text or "[Voice Message]",
       isVoice = payload.isVoice,
       audio = payload.audio,
       time = payload.time or os.date("%I:%M %p"),
@@ -773,7 +787,7 @@ function apiPost(endpoint, payload, callback)
     local msgObj = {
       sender = payload.sender or currentUser.name,
       groupId = payload.groupId,
-      text = payload.text,
+      text = payload.text or "[Voice Message]",
       isVoice = payload.isVoice,
       audio = payload.audio,
       time = payload.time or os.date("%I:%M %p"),
@@ -957,7 +971,7 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
         sender = currentUser.name,
         recipient = targetName,
         groupId = targetName,
-        text = "🎤 Voice Message 🔊",
+        text = "[Voice Message]",
         isVoice = true,
         audio = b64Audio,
         voicePath = voiceRecordPath,
@@ -1002,7 +1016,7 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGro
       if string.find(selectedOption, "React") then
         showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
       elseif string.find(selectedOption, "Reply") then
-        local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", msgItem.text or "")
+        local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", cleanMessageText(msgItem.text, msgItem.isVoice))
         pcall(function()
           if isGroup and editGroupMessageInput then
             editGroupMessageInput.setText(replyPrefix)
@@ -1020,8 +1034,8 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGro
         end)
         announce("Replying to message from " .. (msgItem.sender or "User"))
       elseif string.find(selectedOption, "Pin") then
-        local pinnedText = string.format("📌 Pinned [%s]: %s", msgItem.sender or "User", msgItem.text or "")
-        announce("Pinned message: " .. (msgItem.text or ""))
+        local pinnedText = string.format("📌 Pinned [%s]: %s", msgItem.sender or "User", cleanMessageText(msgItem.text, msgItem.isVoice))
+        announce("Pinned message: " .. cleanMessageText(msgItem.text, msgItem.isVoice))
         Toast.makeText(activity, pinnedText, Toast.LENGTH_LONG).show()
       elseif string.find(selectedOption, "Delete") then
         if isGroup then
@@ -2452,7 +2466,7 @@ function fetchGroupChatThread(groupId)
       if newCount > lastGroupMessageCount and lastGroupMessageCount > 0 and (mutedGroups[groupId] ~= true) then
         local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
-          announce("New message in " .. (activeGroup and activeGroup.name or "group") .. " from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
+          announce("New message in " .. (activeGroup and activeGroup.name or "group") .. " from " .. (latest.sender or "User") .. ": " .. cleanMessageText(latest.text, latest.isVoice))
         end
       end
       lastGroupMessageCount = newCount
@@ -2507,7 +2521,8 @@ function updateGroupChatUI(groupId)
   local msgs = groupChatHistory[groupId] or {}
   for _, m in ipairs(msgs) do
     if type(m) == "table" then
-      local textStr = m.text or ""
+      local isVoiceMsg = (m.isVoice == true) or (m.audio and m.audio ~= "") or (m.voicePath and m.voicePath ~= "")
+      local textStr = cleanMessageText(m.text, isVoiceMsg)
       if m.reaction and m.reaction ~= "" then
         textStr = textStr .. " [" .. m.reaction .. "]"
       end
@@ -2673,7 +2688,7 @@ function fetchPublicFeedMessages()
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
         local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
-          announce("New public message from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
+          announce("New public message from " .. (latest.sender or "User") .. ": " .. cleanMessageText(latest.text, latest.isVoice))
         end
       end
       lastPublicMessageCount = newCount
@@ -2727,7 +2742,8 @@ function updatePublicFeedUI()
   local data = {}
   for _, m in ipairs(publicFeedMessages) do
     if type(m) == "table" then
-      local textStr = m.text or ""
+      local isVoiceMsg = (m.isVoice == true) or (m.audio and m.audio ~= "") or (m.voicePath and m.voicePath ~= "")
+      local textStr = cleanMessageText(m.text, isVoiceMsg)
       if m.reaction and m.reaction ~= "" then
         textStr = textStr .. " [" .. m.reaction .. "]"
       end
@@ -2749,7 +2765,7 @@ function updatePublicFeedUI()
       if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
         downloadAndPlayVoiceNote(selectedMsg)
       else
-        announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
+        announce((selectedMsg.sender or "User") .. ": " .. cleanMessageText(selectedMsg.text, selectedMsg.isVoice))
       end
     end
   end
@@ -3098,7 +3114,7 @@ function fetchPrivateChatThread(targetUsername)
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
         local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender == targetUsername then
-          announce("New private message from " .. targetUsername .. ": " .. (latest.text or ""))
+          announce("New private message from " .. targetUsername .. ": " .. cleanMessageText(latest.text, latest.isVoice))
         end
       end
       lastPrivateMessageCount = newCount
@@ -3153,8 +3169,9 @@ function updatePrivateChatUI(targetUsername)
   local msgs = privateChatHistory[targetUsername] or {}
   for _, m in ipairs(msgs) do
     if type(m) == "table" then
+      local isVoiceMsg = (m.isVoice == true) or (m.audio and m.audio ~= "") or (m.voicePath and m.voicePath ~= "")
       local senderLabel = (string.lower(m.sender) == string.lower(currentUser.name)) and "Me" or (m.sender or targetUsername)
-      local textStr = m.text or ""
+      local textStr = cleanMessageText(m.text, isVoiceMsg)
       if m.reaction and m.reaction ~= "" then
         textStr = textStr .. " [" .. m.reaction .. "]"
       end
@@ -3176,7 +3193,7 @@ function updatePrivateChatUI(targetUsername)
       if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
         downloadAndPlayVoiceNote(selectedMsg)
       else
-        announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
+        announce((selectedMsg.sender or "User") .. ": " .. cleanMessageText(selectedMsg.text, selectedMsg.isVoice))
       end
     end
   end
