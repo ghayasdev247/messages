@@ -1,7 +1,7 @@
 {
-  "version": "2.3.0",
-  "version_code": 30,
+  "version": "2.3.1",
+  "version_code": 31,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 2.3.0: Add Online Members with Multi-Select Checkboxes, Group & Message Deduplication, and Permanent Voice Button Label."
+  "changelog": "Version 2.3.1: Wiped Stale Cloud Users, Strict Lowercase User Deduplication, and Unique Add-Members Dialog."
 }

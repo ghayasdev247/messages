@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.3.0",
-                "version_code": 30,
+                "version": "2.3.1",
+                "version_code": 31,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.3.0: Add Online Members with Multi-Select Checkboxes, Group & Message Deduplication, and Permanent Voice Button Label."
+                "changelog": "Version 2.3.1: Wiped Stale Cloud Users, Strict Lowercase User Deduplication, and Unique Add-Members Dialog."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.3.0 (Build Code: 30)
--- Features: Multi-Select Add Members with Checkboxes, Group & Message Deduplication,
---           Permanent Voice Button Labels, Zero-Lag Presence & 5-Tab Navigation
+-- Version: 2.3.1 (Build Code: 31)
+-- Features: 100% Unique Online User Presence, Unique Multi-Select Add Members,
+--           Group & Message Deduplication, Permanent Voice Labels & 5-Tab Bar
 -- ====================================================================
 
 require "import"
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.3.0"
-local APP_VERSION_CODE = 30
+local APP_VERSION = "2.3.1"
+local APP_VERSION_CODE = 31
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -92,12 +92,12 @@ function getSavedAccountPath()
 end
 
 function getChatFilePath(u1, u2)
-  local u1_lower = string.lower(u1)
-  local u2_lower = string.lower(u2)
+  local u1_lower = string.lower(u1:gsub("^%s+", ""):gsub("%s+$", ""))
+  local u2_lower = string.lower(u2:gsub("^%s+", ""):gsub("%s+$", ""))
   if u1_lower < u2_lower then
-    return "data/chats/" .. u1 .. "_" .. u2 .. ".json"
+    return "data/chats/" .. u1_lower .. "_" .. u2_lower .. ".json"
   else
-    return "data/chats/" .. u2 .. "_" .. u1 .. ".json"
+    return "data/chats/" .. u2_lower .. "_" .. u1_lower .. ".json"
   end
 end
 
@@ -265,7 +265,7 @@ function deduplicateAndSortMessages(msgList)
   
   for _, m in ipairs(msgList) do
     if type(m) == "table" then
-      local sender = string.lower(tostring(m.sender or ""))
+      local sender = string.lower(tostring(m.sender or "")):gsub("^%s+", ""):gsub("%s+$", "")
       local text = tostring(m.text or "")
       local timeStr = tostring(m.time or "")
       local isVoice = (m.isVoice or m.audio or m.voicePath) and "1" or "0"
@@ -711,8 +711,9 @@ function apiPost(endpoint, payload, callback)
   elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
     local username = payload.username or currentUser.name
     if username and username ~= "" then
+      local cleanUser = username:gsub("^%s+", ""):gsub("%s+$", "")
       local now_ts = os.time()
-      local userObj = { name = username, last_seen = now_ts, status = "Online" }
+      local userObj = { name = cleanUser, last_seen = now_ts, status = "Online" }
       postFirebaseData("data/online_users", userObj, function(fbOk)
         if callback then callback(true) end
       end)
@@ -1648,7 +1649,6 @@ function showCreateGroupDialog()
         created_at = os.time()
       }
       
-      -- Insert locally immediately for zero-lag display
       table.insert(groupsList, 1, newGroupObj)
       updateLoungeGroupsUI()
       
@@ -1687,7 +1687,7 @@ function fetchGroupsList()
         addGroupSafe(g)
       end
       
-      -- Also preserve any locally created groups
+      -- Also preserve locally created groups
       for _, g in ipairs(groupsList) do
         addGroupSafe(g)
       end
@@ -1711,12 +1711,12 @@ function updateLoungeGroupsUI()
       local isMember = false
       if type(g.members) == "table" then
         for _, m in ipairs(g.members) do
-          if m == currentUser.name then isMember = true break end
+          if string.lower(tostring(m)) == string.lower(currentUser.name) then isMember = true break end
         end
       end
       
       local matchesSearch = (groupSearchQuery == "") or (string.find(string.lower(name), groupSearchQuery, 1, true) ~= nil) or (string.find(string.lower(desc), groupSearchQuery, 1, true) ~= nil)
-      local isAllowed = (g.isPublic == true) or isMember or (g.creator == currentUser.name) or (g.isPublic == nil)
+      local isAllowed = (g.isPublic == true) or isMember or (string.lower(tostring(g.creator or "")) == string.lower(currentUser.name)) or (g.isPublic == nil)
       
       if isAllowed and matchesSearch then
         table.insert(filtered, g)
@@ -1761,7 +1761,7 @@ function updateLoungeGroupsUI()
   local data = {}
   for _, g in ipairs(filtered) do
     local memberCount = (type(g.members) == "table") and #g.members or 1
-    local badge = (g.creator == currentUser.name) and "👑 Admin (" .. memberCount .. " mem)" or ("👥 " .. memberCount .. " members")
+    local badge = (string.lower(tostring(g.creator or "")) == string.lower(currentUser.name)) and "👑 Admin (" .. memberCount .. " mem)" or ("👥 " .. memberCount .. " members")
     table.insert(data, {
       grpTitle = g.name or "Group",
       grpBadge = badge,
@@ -1788,6 +1788,8 @@ function openGroupChatScreen(groupObj)
   activeTab = "group_chat"
   lastGroupMessageCount = 0
   lastRenderedGroupCount = -1
+  
+  local isCreator = string.lower(tostring(groupObj.creator or "")) == string.lower(currentUser.name)
   
   local groupChatLayout = {
     LinearLayout;
@@ -1827,7 +1829,7 @@ function openGroupChatScreen(groupObj)
         text = "⚙️ Admin";
         textColor = "#FFFFFF";
         backgroundColor = "#00796B";
-        visibility = (groupObj.creator == currentUser.name) and View.VISIBLE or View.GONE;
+        visibility = isCreator and View.VISIBLE or View.GONE;
         ContentDescription = "Group Admin Settings";
       };
     };
@@ -1954,42 +1956,70 @@ end
 
 function showAddMembersDialog(groupObj)
   apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
-    local candidateUsers = {}
+    local candidateMap = {}
     local now_ts = os.time()
+    
     local existingMembers = {}
     if type(groupObj.members) == "table" then
       for _, m in ipairs(groupObj.members) do
-        existingMembers[tostring(m)] = true
+        local cleanM = tostring(m):gsub("^%s+", ""):gsub("%s+$", "")
+        existingMembers[string.lower(cleanM)] = true
       end
     end
-    existingMembers[currentUser.name] = true
+    local myClean = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
+    existingMembers[string.lower(myClean)] = true
     
-    if success and data and type(data) == "table" then
-      for _, u in ipairs(data) do
-        if type(u) == "table" then
-          local uname = u.name or u.username
-          local lastSeen = tonumber(u.last_seen or 0) or 0
-          if uname and (now_ts - lastSeen <= 40) and not existingMembers[uname] then
-            table.insert(candidateUsers, uname)
+    local function checkUser(item)
+      if type(item) == "table" then
+        local name = item.name or item.username
+        local lastSeen = tonumber(item.last_seen or 0) or 0
+        if name and type(name) == "string" and name ~= "" then
+          local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
+          local lowerKey = string.lower(cleanName)
+          local isOnline = (now_ts - lastSeen <= 45) and (item.status == "Online" or item.online == true)
+          
+          if isOnline and not existingMembers[lowerKey] then
+            candidateMap[lowerKey] = cleanName
           end
         end
       end
     end
     
-    if #candidateUsers == 0 then
-      announce("No other online users available to add to this group right now.")
+    if success and data and type(data) == "table" then
+      for _, v1 in pairs(data) do
+        if type(v1) == "table" then
+          if v1.name or v1.username then
+            checkUser(v1)
+          else
+            for _, v2 in pairs(v1) do
+              if type(v2) == "table" then
+                checkUser(v2)
+              end
+            end
+          end
+        end
+      end
+    end
+    
+    local namesArray = {}
+    for _, name in pairs(candidateMap) do
+      table.insert(namesArray, name)
+    end
+    table.sort(namesArray)
+    
+    if #namesArray == 0 then
+      announce("No other online users available to add right now.")
       return
     end
     
     local selectedMap = {}
-    local namesArray = candidateUsers
     local checkedArray = {}
     for i = 1, #namesArray do
       table.insert(checkedArray, false)
     end
     
     local builder = AlertDialog.Builder(activity)
-    builder.setTitle("Add Online Members to " .. (groupObj.name or "Group"))
+    builder.setTitle("Add Online Members")
     builder.setMultiChoiceItems(namesArray, checkedArray, DialogInterface.OnMultiChoiceClickListener{
       onClick = function(dialog, which, isChecked)
         local uName = namesArray[which + 1]
@@ -2019,9 +2049,9 @@ function showAddMembersDialog(groupObj)
                 break
               end
             end
-            commitGitHubFile("data/groups.json", list, "Added " .. addedCount .. " members to " .. groupObj.name, function() end)
+            commitGitHubFile("data/groups.json", list, "Added " .. addedCount .. " members to " .. (groupObj.name or "group"), function() end)
           end)
-          announce("Successfully added " .. addedCount .. " member(s) to " .. (groupObj.name or "Group") .. "!")
+          announce("Added " .. addedCount .. " member(s) to " .. (groupObj.name or "Group") .. "!")
         else
           announce("No members selected.")
         end
@@ -2415,27 +2445,58 @@ end
 function fetchOnlineUsersList()
   apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
     if success and data and type(data) == "table" then
-      local filtered = {}
-      local seenMap = {}
+      local usersMap = {}
       local now_ts = os.time()
       
-      for _, u in ipairs(data) do
-        if type(u) == "table" then
-          local name = u.name or u.username
-          local lastSeen = tonumber(u.last_seen or 0) or 0
-          local isOnline = (now_ts - lastSeen <= 40) and (u.status == "Online" or u.online == true)
-          
-          if name and name ~= currentUser.name and isOnline and not seenMap[name] then
-            seenMap[name] = true
-            table.insert(filtered, {
-              name = name,
-              status = "Online"
-            })
+      local function processUserEntry(item)
+        if type(item) == "table" then
+          local name = item.name or item.username
+          local lastSeen = tonumber(item.last_seen or 0) or 0
+          if name and type(name) == "string" and name ~= "" then
+            local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
+            local lowerKey = string.lower(cleanName)
+            local myLower = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+            
+            if lowerKey ~= myLower and cleanName ~= "" then
+              local isOnline = (now_ts - lastSeen <= 45) and (item.status == "Online" or item.online == true)
+              if isOnline then
+                if not usersMap[lowerKey] or lastSeen > (usersMap[lowerKey].last_seen or 0) then
+                  usersMap[lowerKey] = {
+                    name = cleanName,
+                    status = "Online",
+                    last_seen = lastSeen
+                  }
+                end
+              end
+            end
           end
         end
       end
       
-      onlineUsersList = filtered
+      for _, v1 in pairs(data) do
+        if type(v1) == "table" then
+          if v1.name or v1.username then
+            processUserEntry(v1)
+          else
+            for _, v2 in pairs(v1) do
+              if type(v2) == "table" then
+                processUserEntry(v2)
+              end
+            end
+          end
+        end
+      end
+      
+      local result = {}
+      for _, u in pairs(usersMap) do
+        table.insert(result, u)
+      end
+      
+      table.sort(result, function(a, b)
+        return a.name < b.name
+      end)
+      
+      onlineUsersList = result
       if activeTab == "private" then
         updatePrivateDirectoryUI()
       end
@@ -2713,7 +2774,7 @@ function updatePrivateChatUI(targetUsername)
   local msgs = privateChatHistory[targetUsername] or {}
   for _, m in ipairs(msgs) do
     if type(m) == "table" then
-      local senderLabel = (m.sender == currentUser.name) and "Me" or (m.sender or targetUsername)
+      local senderLabel = (string.lower(m.sender) == string.lower(currentUser.name)) and "Me" or (m.sender or targetUsername)
       local textStr = m.text or ""
       if m.reaction and m.reaction ~= "" then
         textStr = textStr .. " [" .. m.reaction .. "]"
