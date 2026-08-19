@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.4.2",
-                "version_code": 34,
+                "version": "2.5.0",
+                "version_code": 35,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.4.2: Fixed ProgressBar Layout Style Error in Live Update Downloader."
+                "changelog": "Version 2.5.0: Send Join Requests for Approval Groups, Direct Public Join, and Admin View/Approve Requests Inbox."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

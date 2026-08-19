@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.4.2 (Build Code: 34)
--- Features: Fixed ProgressBar layout, Eliminated Chinese Surrogate Characters on Voice Notes,
---           Startup Splash Screen, Live Interactive Updates, Group Sync & Controls
+-- Version: 2.5.0 (Build Code: 35)
+-- Features: Group Join Requests, Direct Public Join, Admin Approval Inbox,
+--           Live Interactive Updates, Global Group Controls & 5-Tab Bar
 -- ====================================================================
 
 require "import"
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.4.2"
-local APP_VERSION_CODE = 34
+local APP_VERSION = "2.5.0"
+local APP_VERSION_CODE = 35
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -266,7 +266,6 @@ function cleanMessageText(text, isVoice)
   end
   if not text or text == "" then return "" end
   
-  -- Strip corrupted Chinese surrogate bytes from old emoji encoding
   local clean = text:gsub("馃帳", ""):gsub("馃懇", ""):gsub("馃", ""):gsub("[\128-\255]+Voice", "Voice")
   if clean == "" or string.find(clean, "Voice Message") or string.find(clean, "Voice Note") then
     return "[Voice Note] - Tap to play"
@@ -1844,7 +1843,6 @@ function showCreateGroupDialog()
 end
 
 function saveGroupToCloud(groupObj, commitMsg, callback)
-  -- 1. Update in local groupsList
   for i, g in ipairs(groupsList) do
     if g.id == groupObj.id or g.name == groupObj.name then
       groupsList[i] = groupObj
@@ -1852,13 +1850,9 @@ function saveGroupToCloud(groupObj, commitMsg, callback)
     end
   end
   
-  -- 2. Post to Firebase group path
   postFirebaseData("data/groups/" .. groupObj.id, groupObj, function() end)
-  
-  -- 3. Post to Firebase all groups
   postFirebaseData("data/groups", groupObj, function() end)
   
-  -- 4. Commit to GitHub
   fetchGitHubFile("data/groups.json", function(ok, currentList)
     local list = currentList or {}
     local found = false
@@ -1894,12 +1888,10 @@ function fetchGroupsList()
         end
       end
       
-      -- Add server groups
       for _, g in ipairs(data) do
         addGroupSafe(g)
       end
       
-      -- Also preserve locally created groups
       for _, g in ipairs(groupsList) do
         addGroupSafe(g)
       end
@@ -1916,6 +1908,8 @@ function updateLoungeGroupsUI()
   if not listLoungeGroups then return end
   
   local filtered = {}
+  local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+  
   for _, g in ipairs(groupsList) do
     if type(g) == "table" then
       local name = g.name or ""
@@ -1923,12 +1917,13 @@ function updateLoungeGroupsUI()
       local isMember = false
       if type(g.members) == "table" then
         for _, m in ipairs(g.members) do
-          if string.lower(tostring(m)) == string.lower(currentUser.name) then isMember = true break end
+          if string.lower(tostring(m):gsub("^%s+", ""):gsub("%s+$", "")) == myClean then isMember = true break end
         end
       end
       
+      local isCreator = (string.lower(tostring(g.creator or ""):gsub("^%s+", ""):gsub("%s+$", "")) == myClean)
       local matchesSearch = (groupSearchQuery == "") or (string.find(string.lower(name), groupSearchQuery, 1, true) ~= nil) or (string.find(string.lower(desc), groupSearchQuery, 1, true) ~= nil)
-      local isAllowed = (g.isPublic == true) or isMember or (string.lower(tostring(g.creator or "")) == string.lower(currentUser.name)) or (g.isPublic == nil)
+      local isAllowed = (g.isPublic == true) or isMember or isCreator or (g.isPublic == nil)
       
       if isAllowed and matchesSearch then
         table.insert(filtered, g)
@@ -1973,7 +1968,35 @@ function updateLoungeGroupsUI()
   local data = {}
   for _, g in ipairs(filtered) do
     local memberCount = (type(g.members) == "table") and #g.members or 1
-    local badge = (string.lower(tostring(g.creator or "")) == string.lower(currentUser.name)) and "👑 Admin (" .. memberCount .. " mem)" or ("👥 " .. memberCount .. " members")
+    local isCreator = (string.lower(tostring(g.creator or ""):gsub("^%s+", ""):gsub("%s+$", "")) == myClean)
+    
+    local isMember = false
+    if type(g.members) == "table" then
+      for _, m in ipairs(g.members) do
+        if string.lower(tostring(m):gsub("^%s+", ""):gsub("%s+$", "")) == myClean then isMember = true break end
+      end
+    end
+    
+    local isPending = false
+    if type(g.pending) == "table" then
+      for _, p in ipairs(g.pending) do
+        if string.lower(tostring(p):gsub("^%s+", ""):gsub("%s+$", "")) == myClean then isPending = true break end
+      end
+    end
+    
+    local badge = ""
+    if isCreator then
+      badge = "👑 Admin (" .. memberCount .. " mem)"
+    elseif isMember then
+      badge = "✅ Joined (" .. memberCount .. " mem)"
+    elseif isPending then
+      badge = "⏳ Requested (" .. memberCount .. " mem)"
+    elseif g.requireApproval then
+      badge = "🔒 Request Req (" .. memberCount .. " mem)"
+    else
+      badge = "🚀 Join (" .. memberCount .. " mem)"
+    end
+    
     table.insert(data, {
       grpTitle = g.name or "Group",
       grpBadge = badge,
@@ -1987,9 +2010,83 @@ function updateLoungeGroupsUI()
   listLoungeGroups.onItemClick = function(p, v, pos, id)
     local selected = filtered[pos + 1]
     if selected then
-      openGroupChatScreen(selected)
+      local isMember = false
+      if type(selected.members) == "table" then
+        for _, m in ipairs(selected.members) do
+          if string.lower(tostring(m):gsub("^%s+", ""):gsub("%s+$", "")) == myClean then isMember = true break end
+        end
+      end
+      if string.lower(tostring(selected.creator or ""):gsub("^%s+", ""):gsub("%s+$", "")) == myClean then
+        isMember = true
+      end
+      
+      if isMember then
+        openGroupChatScreen(selected)
+      else
+        showJoinGroupModal(selected)
+      end
     end
   end
+end
+
+-- --------------------------------------------------------------------
+-- JOIN GROUP MODAL (REQUEST OR INSTANT JOIN)
+-- --------------------------------------------------------------------
+function showJoinGroupModal(groupObj)
+  local myClean = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
+  local isPending = false
+  if type(groupObj.pending) == "table" then
+    for _, p in ipairs(groupObj.pending) do
+      if string.lower(tostring(p):gsub("^%s+", ""):gsub("%s+$", "")) == string.lower(myClean) then
+        isPending = true
+        break
+      end
+    end
+  end
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle(groupObj.name or "Group")
+  
+  local desc = (groupObj.desc and groupObj.desc ~= "") and groupObj.desc or "No description provided."
+  local creator = groupObj.creator or "Community"
+  local memberCount = (type(groupObj.members) == "table") and #groupObj.members or 1
+  
+  local msg = string.format("Topic: %s\nCreator: %s\nMembers: %d\n\n", desc, creator, memberCount)
+  
+  if isPending then
+    msg = msg .. "⏳ Your request to join this group is pending admin approval."
+    builder.setMessage(msg)
+    builder.setPositiveButton("OK", nil)
+  elseif groupObj.requireApproval == true then
+    msg = msg .. "🔒 This group requires admin approval to join."
+    builder.setMessage(msg)
+    builder.setPositiveButton("📩 Send Request to Admin", DialogInterface.OnClickListener{
+      onClick = function(d, w)
+        if type(groupObj.pending) ~= "table" then groupObj.pending = {} end
+        table.insert(groupObj.pending, myClean)
+        saveGroupToCloud(groupObj, myClean .. " requested to join " .. (groupObj.name or ""), function()
+          announce("Join request sent to group admin! Please wait for approval.")
+          updateLoungeGroupsUI()
+        end)
+      end
+    })
+    builder.setNegativeButton("Cancel", nil)
+  else
+    msg = msg .. "🚀 This is an open group. You can join immediately."
+    builder.setMessage(msg)
+    builder.setPositiveButton("Join Group Now", DialogInterface.OnClickListener{
+      onClick = function(d, w)
+        if type(groupObj.members) ~= "table" then groupObj.members = {} end
+        table.insert(groupObj.members, myClean)
+        saveGroupToCloud(groupObj, myClean .. " joined " .. (groupObj.name or ""), function()
+          announce("Joined " .. (groupObj.name or "group") .. " successfully!")
+          openGroupChatScreen(groupObj)
+        end)
+      end
+    })
+    builder.setNegativeButton("Cancel", nil)
+  end
+  builder.show()
 end
 
 -- --------------------------------------------------------------------
@@ -2133,6 +2230,7 @@ end
 function showGlobalGroupSettingsDialog(groupObj)
   local isCreator = string.lower(tostring(groupObj.creator or "")) == string.lower(currentUser.name)
   local memberCount = (type(groupObj.members) == "table") and #groupObj.members or 1
+  local pendingCount = (type(groupObj.pending) == "table") and #groupObj.pending or 0
   local isMuted = (mutedGroups[groupObj.id] == true)
   
   local options = {
@@ -2143,6 +2241,7 @@ function showGlobalGroupSettingsDialog(groupObj)
   }
   
   if isCreator then
+    table.insert(options, "📩 View Join Requests (" .. pendingCount .. " Pending)")
     table.insert(options, "🚫 Remove a Member (Kick)")
     table.insert(options, "👑 Transfer Admin Role")
     table.insert(options, "✏️ Edit Group Name & Description")
@@ -2163,6 +2262,8 @@ function showGlobalGroupSettingsDialog(groupObj)
         showGroupMembersListDialog(groupObj)
       elseif string.find(choice, "Add Online Members") then
         showAddMembersDialog(groupObj)
+      elseif string.find(choice, "View Join Requests") then
+        showViewJoinRequestsDialog(groupObj)
       elseif string.find(choice, "Mute Group") then
         mutedGroups[groupObj.id] = true
         announce("Group notifications muted.")
@@ -2213,6 +2314,65 @@ function showGlobalGroupSettingsDialog(groupObj)
       end
     end
   })
+  builder.show()
+end
+
+function showViewJoinRequestsDialog(groupObj)
+  local pending = groupObj.pending or {}
+  if #pending == 0 then
+    announce("No pending join requests for this group.")
+    return
+  end
+  
+  local displayList = {}
+  for _, p in ipairs(pending) do
+    table.insert(displayList, "👤 " .. tostring(p) .. " - Tap to Approve or Reject")
+  end
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Join Requests: " .. (groupObj.name or "Group") .. " (" .. #pending .. ")")
+  builder.setItems(displayList, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local selectedUser = pending[w + 1]
+      showReviewSingleRequestDialog(groupObj, selectedUser, w + 1)
+    end
+  })
+  builder.setNegativeButton("Close", nil)
+  builder.show()
+end
+
+function showReviewSingleRequestDialog(groupObj, applicantName, applicantIdx)
+  local actions = { "✅ Approve & Add to Group", "❌ Reject Request" }
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Review Request: " .. applicantName)
+  builder.setItems(actions, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      if w == 0 then
+        -- Approve
+        table.remove(groupObj.pending, applicantIdx)
+        if type(groupObj.members) ~= "table" then groupObj.members = { groupObj.creator or currentUser.name } end
+        
+        local alreadyMember = false
+        for _, m in ipairs(groupObj.members) do
+          if string.lower(tostring(m)) == string.lower(applicantName) then alreadyMember = true break end
+        end
+        if not alreadyMember then
+          table.insert(groupObj.members, applicantName)
+        end
+        
+        saveGroupToCloud(groupObj, "Approved " .. applicantName .. " into " .. (groupObj.name or ""), function()
+          announce("Approved " .. applicantName .. "! They are now a member of " .. (groupObj.name or "group"))
+        end)
+      elseif w == 1 then
+        -- Reject
+        table.remove(groupObj.pending, applicantIdx)
+        saveGroupToCloud(groupObj, "Rejected " .. applicantName .. " join request", function()
+          announce("Join request from " .. applicantName .. " rejected.")
+        end)
+      end
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
   builder.show()
 end
 
