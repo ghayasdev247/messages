@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.1.0"
-local APP_VERSION_CODE = 26
+local APP_VERSION = "2.1.1"
+local APP_VERSION_CODE = 27
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -696,7 +696,9 @@ function apiPost(endpoint, payload, callback)
     if username and username ~= "" then
       local now_ts = os.time()
       local userObj = { name = username, last_seen = now_ts, status = "Online" }
-      postFirebaseData("data/online_users/" .. username, userObj, function() end)
+      postFirebaseData("data/online_users/" .. username, userObj, function(fbOk)
+        if callback then callback(true) end
+      end)
       Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
     else
       if callback then callback(false) end
@@ -1156,15 +1158,16 @@ end
 
 function executeLogin(name, pass, remember)
   announce("Connecting to messenger...")
-  apiPost("/api/login", { username = name, password = pass }, function(success)
-    currentUser.name = name
-    currentUser.online = true
-    saveUserCredentials(name, pass, remember)
-    announce("Connected as " .. name .. ". Welcome to Homepage.")
-    showMainAppContainer()
-    switchTab("home")
-    startPollingLoop()
-  end)
+  currentUser.name = name
+  currentUser.online = true
+  saveUserCredentials(name, pass, remember)
+  
+  apiPost("/api/login", { username = name, password = pass }, function(success) end)
+  
+  announce("Connected as " .. name .. ". Welcome to Homepage.")
+  showMainAppContainer()
+  switchTab("home")
+  startPollingLoop()
 end
 
 -- --------------------------------------------------------------------
