@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.5.1"
-local APP_VERSION_CODE = 36
+local APP_VERSION = "2.5.2"
+local APP_VERSION_CODE = 37
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1085,8 +1085,11 @@ end
 -- --------------------------------------------------------------------
 -- 0. STARTUP SPLASH / LOADING SCREEN
 -- --------------------------------------------------------------------
+local hasProceededFromSplash = false
+
 function showSplashScreen()
   activeTab = "splash"
+  hasProceededFromSplash = false
   
   local splashLayout = {
     LinearLayout;
@@ -1108,7 +1111,7 @@ function showSplashScreen()
     {
       TextView;
       id = "txtSplashSubtitle";
-      text = "Version " .. APP_VERSION .. "\n\nChecking for updates and connecting...";
+      text = "Version " .. APP_VERSION .. "\n\nConnecting to Messenger...";
       textSize = "16sp";
       textColor = "#E0F2F1";
       gravity = "center";
@@ -1121,14 +1124,36 @@ function showSplashScreen()
       layout_width = "wrap";
       layout_height = "wrap";
     };
+    {
+      Button;
+      id = "btnSkipSplash";
+      text = "⏩ Skip (Open Messenger Immediately)";
+      layout_width = "fill";
+      layout_height = "50dp";
+      layout_marginTop = "28dp";
+      backgroundColor = "#004D40";
+      textColor = "#FFFFFF";
+      textSize = "15sp";
+      ContentDescription = "Skip update check and open messenger immediately button";
+    };
   }
 
   activity.setContentView(loadlayout(splashLayout))
-  announce("Accessible Messenger starting up, checking for updates...")
+  announce("Accessible Messenger starting up...")
   
-  -- Check for updates on startup
+  if btnSkipSplash then
+    btnSkipSplash.onClick = function()
+      if not hasProceededFromSplash then
+        announce("Skipping update check.")
+        proceedAfterSplash()
+      end
+    end
+  end
+  
+  -- Fast non-blocking update check
   local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
   Http.get(checkUrl, function(code, content)
+    if hasProceededFromSplash then return end
     if code == 200 then
       local manifest = decodeJSON(content)
       if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
@@ -1137,26 +1162,15 @@ function showSplashScreen()
       end
     end
     
-    Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
-      if lCode == 200 then
-        local manifest = decodeJSON(lContent)
-        if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
-          showUpdateAvailableDialog(manifest)
-          return
-        end
-      end
-      
-      -- No update, proceed directly to login/home
-      Handler().postDelayed(Runnable{
-        run = function()
-          proceedAfterSplash()
-        end
-      }, 1000)
-    end)
+    -- If no update detected, proceed immediately without waiting
+    proceedAfterSplash()
   end)
 end
 
 function proceedAfterSplash()
+  if hasProceededFromSplash then return end
+  hasProceededFromSplash = true
+  
   local savedAccount = loadSavedCredentials()
   if savedAccount and savedAccount.username and savedAccount.username ~= "" then
     currentUser.name = savedAccount.username
@@ -3481,12 +3495,24 @@ function createYouTabView()
         };
         {
           Button;
+          id = "btnRegularLogout";
+          text = "🚪 Log Out / Switch Account";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#E65100";
+          textColor = "#FFFFFF";
+          layout_marginBottom = "10dp";
+          ContentDescription = "Log Out and switch account button. Double tap to return to login screen.";
+        };
+        {
+          Button;
           id = "btnLogoutAndForget";
-          text = "🚪 Disconnect / Remove Saved Account";
+          text = "🗑️ Log Out & Wipe Saved Account";
           layout_width = "fill";
           layout_height = "48dp";
           backgroundColor = "#D32F2F";
           textColor = "#FFFFFF";
+          ContentDescription = "Log Out and wipe saved credentials button. Double tap to remove account.";
         };
       };
     };
@@ -3512,6 +3538,20 @@ function createYouTabView()
   if btnCheckAppUpdate then
     btnCheckAppUpdate.onClick = function()
       checkForRemoteUpdates(true)
+    end
+  end
+  
+  if btnRegularLogout then
+    btnRegularLogout.onClick = function()
+      purgeEphemeralAudioFiles()
+      currentUser.name = ""
+      currentUser.online = false
+      isPolling = false
+      publicFeedMessages = {}
+      privateChatHistory = {}
+      groupChatHistory = {}
+      announce("Logged out. Returned to login screen.")
+      showLoginScreen()
     end
   end
   
