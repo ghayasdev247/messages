@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.7.0 (Build Code: 23)
--- Features: Ultra-Fast Chunked Base64 Engine, Scoped-Storage Safe Voice Path,
---           Bulletproof Recording & Screen Reader Voice Engine
+-- Version: 1.8.0 (Build Code: 24)
+-- Features: HD AAC 44.1kHz Audio Recording, Fixed Reply onClick Listener,
+--           Strict Chronological Message Sorting & Scoped-Storage Safe Audio
 -- ====================================================================
 
 require "import"
@@ -15,13 +15,14 @@ import "android.graphics.*"
 import "android.graphics.Typeface"
 import "android.text.InputType"
 import "android.content.Context"
+import "android.content.DialogInterface"
 import "java.io.File"
 
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.7.0"
-local APP_VERSION_CODE = 23
+local APP_VERSION = "1.8.0"
+local APP_VERSION_CODE = 24
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -237,6 +238,21 @@ function decodeBase64ToAudioFile(b64Data, targetPath)
     end
   end)
   return success
+end
+
+function sortMessagesChronologically(msgList)
+  if type(msgList) ~= "table" then return {} end
+  table.sort(msgList, function(a, b)
+    local tA = tonumber(a.timestamp or 0) or 0
+    local tB = tonumber(b.timestamp or 0) or 0
+    if tA ~= tB and tA > 0 and tB > 0 then
+      return tA < tB
+    end
+    local kA = tostring(a._fb_key or a.time or "")
+    local kB = tostring(b._fb_key or b.time or "")
+    return kA < kB
+  end)
+  return msgList
 end
 
 function announce(text)
@@ -494,12 +510,14 @@ function fetchFirebaseData(path, callback)
             end
           end
         else
-          for _, v in pairs(fbData) do
+          for k, v in pairs(fbData) do
             if type(v) == "table" then
+              v._fb_key = tostring(k)
               table.insert(list, v)
             end
           end
         end
+        list = sortMessagesChronologically(list)
         callback(true, list)
         return
       end
@@ -525,7 +543,7 @@ end
 function apiGet(endpoint, githubFilePath, callback)
   fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
     if fbSuccess and fbData and type(fbData) == "table" and #fbData > 0 then
-      callback(true, fbData)
+      callback(true, sortMessagesChronologically(fbData))
       return
     end
     
@@ -533,12 +551,19 @@ function apiGet(endpoint, githubFilePath, callback)
       if code == 200 then
         local res = decodeJSON(content)
         if res and (res.success or res.messages or res.users) then
-          callback(true, res.messages or res.users or res)
+          local fetched = res.messages or res.users or res
+          if type(fetched) == "table" and string.find(endpoint, "messages") or string.find(endpoint, "feed") then
+            fetched = sortMessagesChronologically(fetched)
+          end
+          callback(true, fetched)
           return
         end
       end
       
       fetchGitHubFile(githubFilePath, function(success, data)
+        if success and type(data) == "table" and (string.find(githubFilePath, "feed") or string.find(githubFilePath, "chats")) then
+          data = sortMessagesChronologically(data)
+        end
         callback(success, data)
       end)
     end)
@@ -555,7 +580,8 @@ function apiPost(endpoint, payload, callback)
       text = payload.text,
       isVoice = payload.isVoice,
       audio = payload.audio,
-      time = payload.time or os.date("%I:%M %p")
+      time = payload.time or os.date("%I:%M %p"),
+      timestamp = os.time()
     }
     postFirebaseData("data/public_feed", msgObj, function(fbOk) end)
     Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
@@ -572,7 +598,8 @@ function apiPost(endpoint, payload, callback)
       text = payload.text,
       isVoice = payload.isVoice,
       audio = payload.audio,
-      time = payload.time or os.date("%I:%M %p")
+      time = payload.time or os.date("%I:%M %p"),
+      timestamp = os.time()
     }
     local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
     postFirebaseData(filePath, msgObj, function(fbOk) end)
@@ -630,7 +657,7 @@ function downloadAndPlayVoiceNote(msgItem)
   
   local voiceFolder = getAppAudioDir()
   local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", ""):gsub(":", "")
-  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".3gp"
+  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
   local isFileReady = false
   
   pcall(function()
@@ -639,6 +666,17 @@ function downloadAndPlayVoiceNote(msgItem)
       isFileReady = true
     end
   end)
+
+  if not isFileReady then
+    local fallback3gp = voiceFolder .. "/voice_" .. msgHash .. ".3gp"
+    pcall(function()
+      local fObj = File(fallback3gp)
+      if fObj.exists() and fObj.length() > 0 then
+        targetAudioFile = fallback3gp
+        isFileReady = true
+      end
+    end)
+  end
 
   if not isFileReady then
     pcall(function()
@@ -692,12 +730,15 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
     if isRecordingVoice then return end
     local ok = pcall(function()
       local voiceFolder = getAppAudioDir()
-      voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
+      voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".m4a"
       
+      -- High-Definition AAC Audio Recording Engine (44.1kHz, 128kbps Studio Quality)
       mediaRecorder = MediaRecorder()
       mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+      mediaRecorder.setAudioSamplingRate(44100)
+      mediaRecorder.setAudioEncodingBitRate(128000)
       mediaRecorder.setOutputFile(voiceRecordPath)
       mediaRecorder.prepare()
       mediaRecorder.start()
@@ -705,10 +746,25 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
       
       btnWidget.setText("⏹️")
       btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
-      announce("Recording voice note. Speak now, then tap to stop and send.")
+      announce("Recording HD voice note. Speak now, then tap to stop and send.")
     end)
     if not ok then
-      announce("Failed to start voice recorder. Please check microphone permissions.")
+      -- Fallback to AMR_NB 3GP if AAC profile fails on older hardware
+      pcall(function()
+        local voiceFolder = getAppAudioDir()
+        voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
+        mediaRecorder = MediaRecorder()
+        mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+        mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+        mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+        mediaRecorder.setOutputFile(voiceRecordPath)
+        mediaRecorder.prepare()
+        mediaRecorder.start()
+        isRecordingVoice = true
+        btnWidget.setText("⏹️")
+        btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
+        announce("Recording voice note. Speak now, then tap to stop and send.")
+      end)
     end
   end
   
@@ -734,7 +790,8 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
         isVoice = true,
         audio = b64Audio,
         voicePath = voiceRecordPath,
-        time = os.date("%I:%M %p")
+        time = os.date("%I:%M %p"),
+        timestamp = os.time()
       }
       
       if isPublic then
@@ -765,38 +822,44 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
 
   local builder = AlertDialog.Builder(activity)
   builder.setTitle("Message Options")
-  builder.setItems(options, function(dialog, which)
-    local selectedOption = options[which + 1]
-    
-    if string.find(selectedOption, "React") then
-      showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
-    elseif string.find(selectedOption, "Reply") then
-      local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", msgItem.text or "")
-      if isPublic then
-        editPublicMessageInput.setText(replyPrefix)
-        editPublicMessageInput.setSelection(#replyPrefix)
-      else
-        editMessageInput.setText(replyPrefix)
-        editMessageInput.setSelection(#replyPrefix)
-      end
-      announce("Replying to message from " .. (msgItem.sender or "User"))
-    elseif string.find(selectedOption, "Pin") then
-      local pinnedText = string.format("📌 Pinned [%s]: %s", msgItem.sender or "User", msgItem.text or "")
-      announce("Pinned message: " .. (msgItem.text or ""))
-      Toast.makeText(activity, pinnedText, Toast.LENGTH_LONG).show()
-    elseif string.find(selectedOption, "Delete") then
-      if isPublic then
-        table.remove(publicFeedMessages, msgIndex)
-        updatePublicFeedUI()
-      else
-        if privateChatHistory[targetName] then
-          table.remove(privateChatHistory[targetName], msgIndex)
-          updatePrivateChatUI(targetName)
+  builder.setItems(options, DialogInterface.OnClickListener{
+    onClick = function(dialog, which)
+      local selectedOption = options[which + 1]
+      
+      if string.find(selectedOption, "React") then
+        showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
+      elseif string.find(selectedOption, "Reply") then
+        local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", msgItem.text or "")
+        pcall(function()
+          if isPublic and editPublicMessageInput then
+            editPublicMessageInput.setText(replyPrefix)
+            pcall(function() editPublicMessageInput.setSelection(string.len(replyPrefix)) end)
+            editPublicMessageInput.requestFocus()
+          elseif editMessageInput then
+            editMessageInput.setText(replyPrefix)
+            pcall(function() editMessageInput.setSelection(string.len(replyPrefix)) end)
+            editMessageInput.requestFocus()
+          end
+        end)
+        announce("Replying to message from " .. (msgItem.sender or "User"))
+      elseif string.find(selectedOption, "Pin") then
+        local pinnedText = string.format("📌 Pinned [%s]: %s", msgItem.sender or "User", msgItem.text or "")
+        announce("Pinned message: " .. (msgItem.text or ""))
+        Toast.makeText(activity, pinnedText, Toast.LENGTH_LONG).show()
+      elseif string.find(selectedOption, "Delete") then
+        if isPublic then
+          table.remove(publicFeedMessages, msgIndex)
+          updatePublicFeedUI()
+        else
+          if privateChatHistory[targetName] then
+            table.remove(privateChatHistory[targetName], msgIndex)
+            updatePrivateChatUI(targetName)
+          end
         end
+        announce("Message deleted.")
       end
-      announce("Message deleted.")
     end
-  end)
+  })
   builder.show()
 end
 
@@ -806,16 +869,18 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
   
   local builder = AlertDialog.Builder(activity)
   builder.setTitle("Choose Reaction")
-  builder.setItems(emojis, function(dialog, which)
-    local chosenEmoji = emojiCodes[which + 1]
-    msgItem.reaction = chosenEmoji
-    if isPublic then
-      updatePublicFeedUI()
-    else
-      updatePrivateChatUI(targetName)
+  builder.setItems(emojis, DialogInterface.OnClickListener{
+    onClick = function(dialog, which)
+      local chosenEmoji = emojiCodes[which + 1]
+      msgItem.reaction = chosenEmoji
+      if isPublic then
+        updatePublicFeedUI()
+      else
+        updatePrivateChatUI(targetName)
+      end
+      announce("Reacted with " .. emojis[which + 1] .. " to message")
     end
-    announce("Reacted with " .. emojis[which + 1] .. " to message")
-  end)
+  })
   builder.show()
 end
 
@@ -1343,15 +1408,16 @@ end
 function fetchPublicFeedMessages()
   apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
     if success and data and type(data) == "table" then
-      local newCount = #data
+      local sorted = sortMessagesChronologically(data)
+      local newCount = #sorted
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
-        local latest = data[newCount]
+        local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
           announce("New public message from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
         end
       end
       lastPublicMessageCount = newCount
-      publicFeedMessages = data
+      publicFeedMessages = sorted
       
       if activeScreen == "public_feed" and lastRenderedPublicCount ~= newCount then
         lastRenderedPublicCount = newCount
@@ -1589,15 +1655,16 @@ function fetchPrivateChatThread(targetUsername)
   
   apiGet(endpoint, chatPath, function(success, data)
     if success and data and type(data) == "table" then
-      local newCount = #data
+      local sorted = sortMessagesChronologically(data)
+      local newCount = #sorted
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
-        local latest = data[newCount]
+        local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender == targetUsername then
           announce("New private message from " .. targetUsername .. ": " .. (latest.text or ""))
         end
       end
       lastPrivateMessageCount = newCount
-      privateChatHistory[targetUsername] = data
+      privateChatHistory[targetUsername] = sorted
       
       if activeScreen == "private_chat" and activeChatTarget == targetUsername and lastRenderedPrivateCount ~= newCount then
         lastRenderedPrivateCount = newCount
