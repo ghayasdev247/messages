@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.5.0",
-                "version_code": 35,
+                "version": "2.5.1",
+                "version_code": 36,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.5.0: Send Join Requests for Approval Groups, Direct Public Join, and Admin View/Approve Requests Inbox."
+                "changelog": "Version 2.5.1: Direct Save to Jieshuo Plugin Directory (/storage/emulated/0/jieshuo/plugin/AccessibleMessenger/main.lua) for Instant In-Place Updates on Restart."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
