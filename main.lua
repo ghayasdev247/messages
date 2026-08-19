@@ -1,9 +1,10 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 1.8.0 (Build Code: 24)
--- Features: HD AAC 44.1kHz Audio Recording, Fixed Reply onClick Listener,
---           Strict Chronological Message Sorting & Scoped-Storage Safe Audio
+-- Version: 2.0.0 (Build Code: 25)
+-- Features: 5-Tab Bottom Navigation, Remember Me Permanent Accounts,
+--           Groups Lounge with Admin Approval & Privacy Controls,
+--           HD AAC Voice Engine, Scoped-Storage Safe Audio Pipeline
 -- ====================================================================
 
 require "import"
@@ -21,8 +22,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "1.8.0"
-local APP_VERSION_CODE = 24
+local APP_VERSION = "2.0.0"
+local APP_VERSION_CODE = 25
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -38,15 +39,18 @@ local GITHUB_OWNER = "ghayasdev247"
 local GITHUB_REPO = "messages"
 local GITHUB_BRANCH = "main"
 
-local currentUser = { name = "", online = false, githubToken = "" }
-local activeScreen = "login" -- "login", "dashboard", "public_feed", "private_directory", "private_chat"
+local currentUser = { name = "", online = false, githubToken = "", bio = "Accessible Messenger User" }
+local activeTab = "home" -- "home", "lounge", "public", "private", "you"
 local activeChatTarget = ""
+local activeGroup = nil
 local isPolling = false
 
 local lastPublicMessageCount = 0
 local lastPrivateMessageCount = 0
+local lastGroupMessageCount = 0
 local lastRenderedPublicCount = -1
 local lastRenderedPrivateCount = -1
+local lastRenderedGroupCount = -1
 local lastHeartbeatTime = 0
 
 -- Audio Recording Global State
@@ -55,23 +59,13 @@ local isRecordingVoice = false
 local voiceRecordPath = ""
 local activeVoicePlayer = nil
 
--- Data Stores (Strictly Ephemeral by Default)
+-- Data Stores
 local publicFeedMessages = {}
 local onlineUsersList = {}
 local privateChatHistory = {}
-
--- --------------------------------------------------------------------
--- DETERMINISTIC PATH GENERATOR
--- --------------------------------------------------------------------
-function getChatFilePath(u1, u2)
-  local u1_lower = string.lower(u1)
-  local u2_lower = string.lower(u2)
-  if u1_lower < u2_lower then
-    return "data/chats/" .. u1 .. "_" .. u2 .. ".json"
-  else
-    return "data/chats/" .. u2 .. "_" .. u1 .. ".json"
-  end
-end
+local groupsList = {}
+local groupChatHistory = {}
+local groupSearchQuery = ""
 
 -- --------------------------------------------------------------------
 -- STORAGE DIRECTORY RESOLVER (100% Android Scoped Storage Safe)
@@ -94,8 +88,26 @@ function getAppAudioDir()
   return dir
 end
 
+function getSavedAccountPath()
+  return getAppAudioDir() .. "/saved_account.json"
+end
+
+function getChatFilePath(u1, u2)
+  local u1_lower = string.lower(u1)
+  local u2_lower = string.lower(u2)
+  if u1_lower < u2_lower then
+    return "data/chats/" .. u1 .. "_" .. u2 .. ".json"
+  else
+    return "data/chats/" .. u2 .. "_" .. u1 .. ".json"
+  end
+end
+
+function getGroupChatFilePath(groupId)
+  return "data/groups/" .. groupId .. "_messages.json"
+end
+
 -- --------------------------------------------------------------------
--- JSON & FAST CHUNKED BASE64 ENGINE (100% Binary Safe & Fast)
+-- JSON & FAST CHUNKED BASE64 ENGINE
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
@@ -263,7 +275,54 @@ function announce(text)
 end
 
 -- --------------------------------------------------------------------
--- EPHEMERAL STORAGE CLEANUP ENGINE (Purge Audio Files from Device)
+-- PERMANENT SAVED ACCOUNTS ENGINE (Remember Me)
+-- --------------------------------------------------------------------
+function saveUserCredentials(username, password, remember)
+  if not remember then
+    clearSavedCredentials()
+    return
+  end
+  local data = {
+    username = username,
+    password = password,
+    saved_at = os.time()
+  }
+  pcall(function()
+    local path = getSavedAccountPath()
+    local f = io.open(path, "w")
+    if f then
+      f:write(encodeJSON(data))
+      f:close()
+    end
+  end)
+end
+
+function loadSavedCredentials()
+  local path = getSavedAccountPath()
+  local creds = nil
+  pcall(function()
+    local f = io.open(path, "r")
+    if f then
+      local content = f:read("*a")
+      f:close()
+      if content and content ~= "" then
+        creds = decodeJSON(content)
+      end
+    end
+  end)
+  return creds
+end
+
+function clearSavedCredentials()
+  pcall(function()
+    local path = getSavedAccountPath()
+    local f = File(path)
+    if f.exists() then f.delete() end
+  end)
+end
+
+-- --------------------------------------------------------------------
+-- EPHEMERAL STORAGE CLEANUP ENGINE
 -- --------------------------------------------------------------------
 function purgeEphemeralAudioFiles()
   pcall(function()
@@ -273,7 +332,10 @@ function purgeEphemeralAudioFiles()
       local files = folder.listFiles()
       if files then
         for i = 0, #files - 1 do
-          files[i].delete()
+          local name = files[i].getName()
+          if name ~= "saved_account.json" then
+            files[i].delete()
+          end
         end
       end
     end
@@ -283,12 +345,12 @@ end
 function purgeCloudFeed(path)
   local fbPath = path:gsub("%.json$", "")
   local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json"
-  Http.post(fbUrl, "[]", function(code, content) end)
+  Http.post(fbUrl, "[]", function() end)
   commitGitHubFile(path, {}, "Purged ephemeral feed", function() end)
 end
 
 -- --------------------------------------------------------------------
--- LOCAL CHAT EXPORTER (Save to Mobile Downloads Folder)
+-- LOCAL CHAT EXPORTER
 -- --------------------------------------------------------------------
 function saveChatLocally(chatType, targetName, messagesList)
   local downloadDir = "/sdcard/Download/Accessible_Messenger_Chats"
@@ -550,9 +612,9 @@ function apiGet(endpoint, githubFilePath, callback)
     Http.get(BACKEND_URL .. endpoint, function(code, content)
       if code == 200 then
         local res = decodeJSON(content)
-        if res and (res.success or res.messages or res.users) then
-          local fetched = res.messages or res.users or res
-          if type(fetched) == "table" and string.find(endpoint, "messages") or string.find(endpoint, "feed") then
+        if res and (res.success or res.messages or res.users or res.groups) then
+          local fetched = res.messages or res.users or res.groups or res
+          if type(fetched) == "table" and (string.find(endpoint, "messages") or string.find(endpoint, "feed")) then
             fetched = sortMessagesChronologically(fetched)
           end
           callback(true, fetched)
@@ -561,7 +623,7 @@ function apiGet(endpoint, githubFilePath, callback)
       end
       
       fetchGitHubFile(githubFilePath, function(success, data)
-        if success and type(data) == "table" and (string.find(githubFilePath, "feed") or string.find(githubFilePath, "chats")) then
+        if success and type(data) == "table" and (string.find(githubFilePath, "feed") or string.find(githubFilePath, "chats") or string.find(githubFilePath, "groups")) then
           data = sortMessagesChronologically(data)
         end
         callback(success, data)
@@ -583,7 +645,7 @@ function apiPost(endpoint, payload, callback)
       time = payload.time or os.date("%I:%M %p"),
       timestamp = os.time()
     }
-    postFirebaseData("data/public_feed", msgObj, function(fbOk) end)
+    postFirebaseData("data/public_feed", msgObj, function() end)
     Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
     fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
       local feedToSave = currentFeed or {}
@@ -602,12 +664,31 @@ function apiPost(endpoint, payload, callback)
       timestamp = os.time()
     }
     local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-    postFirebaseData(filePath, msgObj, function(fbOk) end)
+    postFirebaseData(filePath, msgObj, function() end)
     Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
     fetchGitHubFile(filePath, function(ok, currentThread)
       local threadToSave = currentThread or {}
       table.insert(threadToSave, msgObj)
       commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
+    end)
+
+  elseif string.find(endpoint, "/api/group%-messages") then
+    local msgObj = {
+      sender = payload.sender or currentUser.name,
+      groupId = payload.groupId,
+      text = payload.text,
+      isVoice = payload.isVoice,
+      audio = payload.audio,
+      time = payload.time or os.date("%I:%M %p"),
+      timestamp = os.time()
+    }
+    local filePath = getGroupChatFilePath(msgObj.groupId)
+    postFirebaseData(filePath, msgObj, function() end)
+    Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
+    fetchGitHubFile(filePath, function(ok, currentThread)
+      local threadToSave = currentThread or {}
+      table.insert(threadToSave, msgObj)
+      commitGitHubFile(filePath, threadToSave, "Group message in " .. msgObj.groupId, callback)
     end)
 
   elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
@@ -723,7 +804,7 @@ function downloadAndPlayVoiceNote(msgItem)
   end
 end
 
-function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
+function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
   import "android.media.MediaRecorder"
   
   local function startVoiceRecording()
@@ -732,7 +813,6 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
       local voiceFolder = getAppAudioDir()
       voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".m4a"
       
-      -- High-Definition AAC Audio Recording Engine (44.1kHz, 128kbps Studio Quality)
       mediaRecorder = MediaRecorder()
       mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
       mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -749,7 +829,6 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
       announce("Recording HD voice note. Speak now, then tap to stop and send.")
     end)
     if not ok then
-      -- Fallback to AMR_NB 3GP if AAC profile fails on older hardware
       pcall(function()
         local voiceFolder = getAppAudioDir()
         voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
@@ -762,7 +841,6 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
         mediaRecorder.start()
         isRecordingVoice = true
         btnWidget.setText("⏹️")
-        btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
         announce("Recording voice note. Speak now, then tap to stop and send.")
       end)
     end
@@ -786,6 +864,7 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
       local msgObj = {
         sender = currentUser.name,
         recipient = targetName,
+        groupId = targetName,
         text = "🎤 Voice Message 🔊",
         isVoice = true,
         audio = b64Audio,
@@ -794,7 +873,9 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName)
         timestamp = os.time()
       }
       
-      if isPublic then
+      if isGroup then
+        apiPost("/api/group-messages", msgObj, function() fetchGroupChatThread(targetName) end)
+      elseif isPublic then
         apiPost("/api/public-feed", msgObj, function() fetchPublicFeedMessages() end)
       else
         apiPost("/api/private-messages", msgObj, function() fetchPrivateChatThread(targetName) end)
@@ -817,7 +898,7 @@ end
 -- --------------------------------------------------------------------
 -- LONG-PRESS-ONLY MESSAGE OPTIONS MODAL
 -- --------------------------------------------------------------------
-function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
+function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
   local options = { "❤️ React with Emoji", "↩️ Reply to Message", "📌 Pin Message", "🗑️ Delete Message" }
 
   local builder = AlertDialog.Builder(activity)
@@ -827,11 +908,15 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
       local selectedOption = options[which + 1]
       
       if string.find(selectedOption, "React") then
-        showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
+        showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
       elseif string.find(selectedOption, "Reply") then
         local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", msgItem.text or "")
         pcall(function()
-          if isPublic and editPublicMessageInput then
+          if isGroup and editGroupMessageInput then
+            editGroupMessageInput.setText(replyPrefix)
+            pcall(function() editGroupMessageInput.setSelection(string.len(replyPrefix)) end)
+            editGroupMessageInput.requestFocus()
+          elseif isPublic and editPublicMessageInput then
             editPublicMessageInput.setText(replyPrefix)
             pcall(function() editPublicMessageInput.setSelection(string.len(replyPrefix)) end)
             editPublicMessageInput.requestFocus()
@@ -847,7 +932,12 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
         announce("Pinned message: " .. (msgItem.text or ""))
         Toast.makeText(activity, pinnedText, Toast.LENGTH_LONG).show()
       elseif string.find(selectedOption, "Delete") then
-        if isPublic then
+        if isGroup then
+          if groupChatHistory[targetName] then
+            table.remove(groupChatHistory[targetName], msgIndex)
+            updateGroupChatUI(targetName)
+          end
+        elseif isPublic then
           table.remove(publicFeedMessages, msgIndex)
           updatePublicFeedUI()
         else
@@ -863,7 +953,7 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName)
   builder.show()
 end
 
-function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
+function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
   local emojis = { "👍 Like", "❤️ Love", "😂 Laugh", "😮 Wow", "😢 Sad", "🔥 Fire" }
   local emojiCodes = { "👍", "❤️", "😂", "😮", "😢", "🔥" }
   
@@ -873,7 +963,9 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
     onClick = function(dialog, which)
       local chosenEmoji = emojiCodes[which + 1]
       msgItem.reaction = chosenEmoji
-      if isPublic then
+      if isGroup then
+        updateGroupChatUI(targetName)
+      elseif isPublic then
         updatePublicFeedUI()
       else
         updatePrivateChatUI(targetName)
@@ -885,421 +977,179 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName)
 end
 
 -- --------------------------------------------------------------------
--- 1. WHATSAPP & MESSENGER STYLED LOGIN SCREEN
+-- 1. LOGIN SCREEN WITH PERMANENT ACCOUNT & REMEMBER ME
 -- --------------------------------------------------------------------
-local loginLayout = {
-  LinearLayout;
-  orientation = "vertical";
-  layout_width = "fill";
-  layout_height = "fill";
-  padding = "20dp";
-  backgroundColor = "#F4F6F9";
-  {
-    TextView;
-    text = "Accessible Messenger";
-    textSize = "26sp";
-    textColor = "#075E54";
-    layout_gravity = "center";
-    padding = "10dp";
-    ContentDescription = "Accessible Messenger Application Header";
-  };
-  {
-    TextView;
-    text = "Anonymous Cloud Login (v" .. APP_VERSION .. ")";
-    textSize = "15sp";
-    textColor = "#555555";
-    layout_gravity = "center";
-    layout_marginBottom = "25dp";
-    ContentDescription = "Subtitle: Anonymous Cloud Login version " .. APP_VERSION;
-  };
-  {
-    TextView;
-    text = "Step 1: Enter Username";
-    textSize = "15sp";
-    textColor = "#222222";
-    layout_marginTop = "5dp";
-    ContentDescription = "Step 1: Enter Username label";
-  };
-  {
-    EditText;
-    id = "editUsername";
-    hint = "Type any alias or handle";
-    layout_width = "fill";
-    textSize = "17sp";
-    padding = "14dp";
-    backgroundColor = "#FFFFFF";
-    ContentDescription = "Username edit box. Type your desired alias here.";
-  };
-  {
-    TextView;
-    text = "Step 2: Enter Password";
-    textSize = "15sp";
-    textColor = "#222222";
-    layout_marginTop = "14dp";
-    ContentDescription = "Step 2: Enter Password label";
-  };
-  {
-    EditText;
-    id = "editPassword";
-    hint = "Type a password";
-    inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD;
-    layout_width = "fill";
-    textSize = "17sp";
-    padding = "14dp";
-    backgroundColor = "#FFFFFF";
-    ContentDescription = "Password edit box. Type your password here.";
-  };
-  {
-    Button;
-    id = "btnLogin";
-    text = "Connect to Messenger";
-    layout_width = "fill";
-    layout_height = "55dp";
-    layout_marginTop = "25dp";
-    backgroundColor = "#075E54";
-    textColor = "#FFFFFF";
-    textSize = "18sp";
-    ContentDescription = "Connect to Messenger button. Double tap to sign in.";
-  };
-  {
-    Button;
-    id = "btnCheckUpdate";
-    text = "🔄 Check for Auto Updates";
-    layout_width = "fill";
-    layout_height = "45dp";
-    layout_marginTop = "14dp";
-    backgroundColor = "#455A64";
-    textColor = "#FFFFFF";
-    textSize = "14sp";
-    ContentDescription = "Check for Auto Updates button. Double tap to check for updates.";
-  };
-}
-
--- --------------------------------------------------------------------
--- 2. HOMEPAGE / DASHBOARD LAYOUT
--- --------------------------------------------------------------------
-local dashboardLayout = {
-  LinearLayout;
-  orientation = "vertical";
-  layout_width = "fill";
-  layout_height = "fill";
-  padding = "20dp";
-  backgroundColor = "#FFFFFF";
-  {
-    TextView;
-    id = "txtDashboardHeader";
-    text = "Messenger Main Home";
-    textSize = "24sp";
-    textColor = "#075E54";
-    layout_gravity = "center";
-    layout_marginBottom = "5dp";
-    ContentDescription = "Messenger Main Home Screen Header";
-  };
-  {
-    TextView;
-    id = "txtLoggedAs";
-    text = "Status: Connected (v" .. APP_VERSION .. ")";
-    textSize = "15sp";
-    textColor = "#2E7D32";
-    layout_gravity = "center";
-    layout_marginBottom = "25dp";
-    ContentDescription = "Status indicator: Connected.";
-  };
-  {
-    Button;
-    id = "btnOpenPublicFeed";
-    text = "🌐 Public Feed";
-    layout_width = "fill";
-    layout_height = "65dp";
-    layout_marginBottom = "15dp";
-    backgroundColor = "#128C7E";
-    textColor = "#FFFFFF";
-    textSize = "18sp";
-    ContentDescription = "Public Feed button. Double tap to view or send public messages.";
-  };
-  {
-    Button;
-    id = "btnOpenPrivateChats";
-    text = "💬 Private Chats (Online Users Only)";
-    layout_width = "fill";
-    layout_height = "65dp";
-    layout_marginBottom = "15dp";
-    backgroundColor = "#075E54";
-    textColor = "#FFFFFF";
-    textSize = "18sp";
-    ContentDescription = "Private Chats button. Double tap to view currently active online users.";
-  };
-  {
-    Button;
-    id = "btnCheckUpdateHome";
-    text = "🔄 Check for Updates";
-    layout_width = "fill";
-    layout_height = "50dp";
-    layout_marginBottom = "15dp";
-    backgroundColor = "#455A64";
-    textColor = "#FFFFFF";
-    textSize = "15sp";
-    ContentDescription = "Check for Updates button. Double tap to check for updates.";
-  };
-  {
-    Button;
-    id = "btnLogout";
-    text = "Disconnect / Logout";
-    layout_width = "fill";
-    layout_height = "50dp";
-    backgroundColor = "#D32F2F";
-    textColor = "#FFFFFF";
-    textSize = "16sp";
-    ContentDescription = "Disconnect button. Double tap to log out.";
-  };
-}
-
--- --------------------------------------------------------------------
--- 3. PUBLIC FEED SCREEN LAYOUT
--- --------------------------------------------------------------------
-local publicFeedLayout = {
-  LinearLayout;
-  orientation = "vertical";
-  layout_width = "fill";
-  layout_height = "fill";
-  padding = "12dp";
-  backgroundColor = "#E5DDD5";
-  {
+function showLoginScreen()
+  activeTab = "login"
+  isPolling = false
+  
+  local savedAccount = loadSavedCredentials()
+  
+  local loginLayout = {
     LinearLayout;
-    orientation = "horizontal";
-    layout_width = "fill";
-    gravity = "center_vertical";
-    padding = "10dp";
-    backgroundColor = "#075E54";
-    {
-      Button;
-      id = "btnPublicToHome";
-      text = "< Home";
-      textColor = "#FFFFFF";
-      backgroundColor = "#075E54";
-      ContentDescription = "Back to home dashboard button";
-    };
-    {
-      TextView;
-      text = "Public Feed";
-      textSize = "18sp";
-      textColor = "#FFFFFF";
-      layout_marginLeft = "8dp";
-      layout_weight = "1";
-      ContentDescription = "Public Feed room.";
-    };
-    {
-      Button;
-      id = "btnSavePublicChatLocal";
-      text = "📥 Save";
-      textColor = "#FFFFFF";
-      backgroundColor = "#128C7E";
-      ContentDescription = "Save Public Chat Locally button";
-    };
-  };
-  {
-    ListView;
-    id = "listPublicMessages";
-    layout_width = "fill";
-    layout_weight = "1";
-    layout_marginTop = "8dp";
-    layout_marginBottom = "8dp";
-    divider = nil;
-    dividerHeight = "0dp";
-    stackFromBottom = true;
-    transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
-  };
-  {
-    LinearLayout;
-    orientation = "horizontal";
-    layout_width = "fill";
-    gravity = "center_vertical";
-    padding = "4dp";
-    {
-      EditText;
-      id = "editPublicMessageInput";
-      hint = "Type message...";
-      layout_weight = "1";
-      textSize = "16sp";
-      padding = "12dp";
-      backgroundColor = "#FFFFFF";
-      ContentDescription = "Public message text field.";
-    };
-    {
-      Button;
-      id = "btnSendPublicMessage";
-      text = "Post";
-      backgroundColor = "#075E54";
-      textColor = "#FFFFFF";
-      layout_marginLeft = "4dp";
-      ContentDescription = "Post public message button";
-    };
-    {
-      Button;
-      id = "btnRecordPublicVoice";
-      text = "🎙️";
-      backgroundColor = "#075E54";
-      textColor = "#FFFFFF";
-      textSize = "20sp";
-      layout_width = "50dp";
-      layout_height = "50dp";
-      layout_marginLeft = "6dp";
-      ContentDescription = "Record voice note button. Double tap to record.";
-    };
-  };
-}
-
--- --------------------------------------------------------------------
--- 4. PRIVATE CHATS DIRECTORY LAYOUT (ONLINE USERS ONLY)
--- --------------------------------------------------------------------
-local privateDirectoryLayout = {
-  LinearLayout;
-  orientation = "vertical";
-  layout_width = "fill";
-  layout_height = "fill";
-  padding = "16dp";
-  backgroundColor = "#FFFFFF";
-  {
-    LinearLayout;
-    orientation = "horizontal";
-    layout_width = "fill";
-    gravity = "center_vertical";
-    layout_marginBottom = "10dp";
-    {
-      Button;
-      id = "btnPrivateToHome";
-      text = "< Home";
-      ContentDescription = "Back to main homepage";
-    };
-    {
-      TextView;
-      text = "Active Online Users";
-      textSize = "18sp";
-      textColor = "#075E54";
-      layout_marginLeft = "10dp";
-      layout_weight = "1";
-      ContentDescription = "Currently Active Online Users directory.";
-    };
-    {
-      Button;
-      id = "btnRefreshUsers";
-      text = "Refresh";
-      ContentDescription = "Refresh online users directory button";
-    };
-  };
-  {
-    ListView;
-    id = "listOnlineUsers";
+    orientation = "vertical";
     layout_width = "fill";
     layout_height = "fill";
-    dividerHeight = "2dp";
-  };
-}
-
--- --------------------------------------------------------------------
--- 5. PRIVATE CHAT ROOM LAYOUT
--- --------------------------------------------------------------------
-local chatLayout = {
-  LinearLayout;
-  orientation = "vertical";
-  layout_width = "fill";
-  layout_height = "fill";
-  padding = "12dp";
-  backgroundColor = "#E5DDD5";
-  {
-    LinearLayout;
-    orientation = "horizontal";
-    layout_width = "fill";
-    gravity = "center_vertical";
-    padding = "10dp";
-    backgroundColor = "#075E54";
+    padding = "20dp";
+    backgroundColor = "#F4F6F9";
     {
-      Button;
-      id = "btnBackToPrivateList";
-      text = "< Directory";
-      textColor = "#FFFFFF";
-      backgroundColor = "#075E54";
-      ContentDescription = "Back to private chats directory";
+      TextView;
+      text = "Accessible Messenger";
+      textSize = "26sp";
+      textColor = "#075E54";
+      Typeface = Typeface.DEFAULT_BOLD;
+      layout_gravity = "center";
+      padding = "10dp";
+      ContentDescription = "Accessible Messenger Application Header";
     };
     {
       TextView;
-      id = "txtChatTargetHeader";
-      text = "Private Chat";
-      textSize = "18sp";
-      textColor = "#FFFFFF";
-      layout_marginLeft = "8dp";
-      layout_weight = "1";
-      ContentDescription = "Currently chatting in private room.";
+      text = "Anonymous Cloud Login (v" .. APP_VERSION .. ")";
+      textSize = "15sp";
+      textColor = "#555555";
+      layout_gravity = "center";
+      layout_marginBottom = "15dp";
+      ContentDescription = "Subtitle: Anonymous Cloud Login version " .. APP_VERSION;
     };
     {
-      Button;
-      id = "btnSavePrivateChatLocal";
-      text = "📥 Save";
-      textColor = "#FFFFFF";
-      backgroundColor = "#128C7E";
-      ContentDescription = "Save Private Chat Locally button";
+      LinearLayout;
+      id = "layoutQuickConnect";
+      orientation = "vertical";
+      layout_width = "fill";
+      padding = "14dp";
+      backgroundColor = "#E0F2F1";
+      layout_marginBottom = "15dp";
+      visibility = (savedAccount ~= nil) and View.VISIBLE or View.GONE;
+      {
+        TextView;
+        id = "txtSavedUser";
+        text = "⚡ Saved Account: " .. (savedAccount and savedAccount.username or "");
+        textSize = "16sp";
+        textColor = "#004D40";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Saved account found on this device.";
+      };
+      {
+        Button;
+        id = "btnQuickConnect";
+        text = "Connect as Saved User";
+        layout_width = "fill";
+        layout_height = "48dp";
+        layout_marginTop = "8dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        textSize = "15sp";
+        ContentDescription = "Connect as Saved User button. Double tap to sign in instantly.";
+      };
+      {
+        Button;
+        id = "btnRemoveSavedAccount";
+        text = "Forget / Remove Saved Account";
+        layout_width = "fill";
+        layout_height = "38dp";
+        layout_marginTop = "6dp";
+        backgroundColor = "#CFD8DC";
+        textColor = "#37474F";
+        textSize = "13sp";
+        ContentDescription = "Forget Saved Account button. Double tap to remove saved credentials.";
+      };
     };
-  };
-  {
-    ListView;
-    id = "listChatMessages";
-    layout_width = "fill";
-    layout_weight = "1";
-    layout_marginTop = "8dp";
-    layout_marginBottom = "8dp";
-    divider = nil;
-    dividerHeight = "0dp";
-    stackFromBottom = true;
-    transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
-  };
-  {
-    LinearLayout;
-    orientation = "horizontal";
-    layout_width = "fill";
-    gravity = "center_vertical";
-    padding = "4dp";
+    {
+      TextView;
+      text = "Step 1: Enter Username";
+      textSize = "15sp";
+      textColor = "#222222";
+      layout_marginTop = "5dp";
+      ContentDescription = "Step 1: Enter Username label";
+    };
     {
       EditText;
-      id = "editMessageInput";
-      hint = "Type message...";
-      layout_weight = "1";
-      textSize = "16sp";
-      padding = "12dp";
+      id = "editUsername";
+      hint = "Type any alias or handle";
+      layout_width = "fill";
+      textSize = "17sp";
+      padding = "14dp";
       backgroundColor = "#FFFFFF";
-      ContentDescription = "Private message text field.";
+      text = (savedAccount and savedAccount.username or "");
+      ContentDescription = "Username edit box.";
+    };
+    {
+      TextView;
+      text = "Step 2: Enter Password";
+      textSize = "15sp";
+      textColor = "#222222";
+      layout_marginTop = "12dp";
+      ContentDescription = "Step 2: Enter Password label";
+    };
+    {
+      EditText;
+      id = "editPassword";
+      hint = "Type a password";
+      inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD;
+      layout_width = "fill";
+      textSize = "17sp";
+      padding = "14dp";
+      backgroundColor = "#FFFFFF";
+      text = (savedAccount and savedAccount.password or "");
+      ContentDescription = "Password edit box.";
+    };
+    {
+      CheckBox;
+      id = "chkRememberMe";
+      text = "Remember me on this device (Save Account)";
+      textSize = "15sp";
+      textColor = "#075E54";
+      layout_marginTop = "10dp";
+      checked = (savedAccount ~= nil);
+      ContentDescription = "Remember me on this device checkbox.";
     };
     {
       Button;
-      id = "btnSendMessage";
-      text = "Send";
+      id = "btnLogin";
+      text = "Connect to Messenger";
+      layout_width = "fill";
+      layout_height = "55dp";
+      layout_marginTop = "20dp";
       backgroundColor = "#075E54";
       textColor = "#FFFFFF";
-      layout_marginLeft = "4dp";
-      ContentDescription = "Send private message button";
+      textSize = "18sp";
+      ContentDescription = "Connect to Messenger button. Double tap to sign in.";
     };
     {
       Button;
-      id = "btnRecordPrivateVoice";
-      text = "🎙️";
-      backgroundColor = "#075E54";
+      id = "btnCheckUpdate";
+      text = "🔄 Check for Auto Updates";
+      layout_width = "fill";
+      layout_height = "45dp";
+      layout_marginTop = "10dp";
+      backgroundColor = "#455A64";
       textColor = "#FFFFFF";
-      textSize = "20sp";
-      layout_width = "50dp";
-      layout_height = "50dp";
-      layout_marginLeft = "6dp";
-      ContentDescription = "Record voice note button. Double tap to record.";
+      textSize = "14sp";
+      ContentDescription = "Check for Auto Updates button.";
     };
-  };
-}
+  }
 
--- --------------------------------------------------------------------
--- SCREEN CONTROLLERS
--- --------------------------------------------------------------------
-
-function showLoginScreen()
-  activeScreen = "login"
-  isPolling = false
   activity.setContentView(loadlayout(loginLayout))
+  
+  if btnQuickConnect then
+    btnQuickConnect.onClick = function()
+      if savedAccount and savedAccount.username and savedAccount.username ~= "" then
+        executeLogin(savedAccount.username, savedAccount.password or "", true)
+      end
+    end
+  end
+  
+  if btnRemoveSavedAccount then
+    btnRemoveSavedAccount.onClick = function()
+      clearSavedCredentials()
+      savedAccount = nil
+      layoutQuickConnect.setVisibility(View.GONE)
+      editUsername.setText("")
+      editPassword.setText("")
+      chkRememberMe.setChecked(false)
+      announce("Saved account credentials removed from device.")
+    end
+  end
   
   btnCheckUpdate.onClick = function()
     checkForRemoteUpdates(true)
@@ -1308,126 +1158,770 @@ function showLoginScreen()
   btnLogin.onClick = function()
     local name = editUsername.getText().toString()
     local pass = editPassword.getText().toString()
+    local remember = chkRememberMe.isChecked()
     
     if name == "" or pass == "" then
       announce("Error: Please enter both a username and password.")
       return
     end
     
-    announce("Connecting to messenger...")
-    
-    apiPost("/api/login", { username = name, password = pass }, function(success)
-      currentUser.name = name
-      currentUser.online = true
-      announce("Connected as " .. name .. ". Welcome to Homepage.")
-      showDashboardScreen()
-      startPollingLoop()
-    end)
+    executeLogin(name, pass, remember)
   end
 end
 
-function showDashboardScreen()
-  activeScreen = "dashboard"
-  activity.setContentView(loadlayout(dashboardLayout))
-  
-  txtLoggedAs.setText("Logged in as: " .. currentUser.name .. " (v" .. APP_VERSION .. ")")
-  txtLoggedAs.setContentDescription("Logged in as " .. currentUser.name)
-  
-  btnOpenPublicFeed.onClick = function()
-    announce("Opening Public Feed")
-    showPublicFeedScreen()
-  end
-  
-  btnOpenPrivateChats.onClick = function()
-    announce("Opening Active Online Users Directory")
-    showPrivateDirectoryScreen()
-  end
-  
-  btnCheckUpdateHome.onClick = function()
-    checkForRemoteUpdates(true)
-  end
-  
-  btnLogout.onClick = function()
-    purgeCloudFeed("data/online_users.json")
-    purgeEphemeralAudioFiles()
-    currentUser.name = ""
-    currentUser.online = false
-    isPolling = false
-    publicFeedMessages = {}
-    privateChatHistory = {}
-    announce("Disconnected from messenger.")
-    showLoginScreen()
-  end
+function executeLogin(name, pass, remember)
+  announce("Connecting to messenger...")
+  apiPost("/api/login", { username = name, password = pass }, function(success)
+    currentUser.name = name
+    currentUser.online = true
+    saveUserCredentials(name, pass, remember)
+    announce("Connected as " .. name .. ". Welcome to Homepage.")
+    showMainAppContainer()
+    switchTab("home")
+    startPollingLoop()
+  end)
 end
 
 -- --------------------------------------------------------------------
--- PUBLIC FEED CONTROLLER
+-- 2. UNIFIED 5-TAB CONTAINER & NAVIGATION ENGINE
 -- --------------------------------------------------------------------
-function showPublicFeedScreen()
-  activeScreen = "public_feed"
-  lastRenderedPublicCount = -1
-  activity.setContentView(loadlayout(publicFeedLayout))
+function showMainAppContainer()
+  local mainContainerLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    backgroundColor = "#F4F6F9";
+    {
+      FrameLayout;
+      id = "tabContentContainer";
+      layout_width = "fill";
+      layout_weight = "1";
+    };
+    {
+      LinearLayout;
+      id = "bottomTabBar";
+      orientation = "horizontal";
+      layout_width = "fill";
+      layout_height = "60dp";
+      backgroundColor = "#FFFFFF";
+      gravity = "center_vertical";
+      elevation = "8dp";
+      {
+        Button;
+        id = "tabBtnHome";
+        text = "🏠 Home";
+        layout_weight = "1";
+        layout_height = "fill";
+        textSize = "12sp";
+        textColor = "#075E54";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "Home Tab. Double tap to open.";
+      };
+      {
+        Button;
+        id = "tabBtnLounge";
+        text = "🚀 Lounge";
+        layout_weight = "1";
+        layout_height = "fill";
+        textSize = "12sp";
+        textColor = "#555555";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "Lounge Groups Tab. Double tap to open.";
+      };
+      {
+        Button;
+        id = "tabBtnPublic";
+        text = "🌐 Public";
+        layout_weight = "1";
+        layout_height = "fill";
+        textSize = "12sp";
+        textColor = "#555555";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "Public Lobby Tab. Double tap to open.";
+      };
+      {
+        Button;
+        id = "tabBtnPrivate";
+        text = "💬 Private";
+        layout_weight = "1";
+        layout_height = "fill";
+        textSize = "12sp";
+        textColor = "#555555";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "Private Lobby Tab. Double tap to open.";
+      };
+      {
+        Button;
+        id = "tabBtnYou";
+        text = "👤 You";
+        layout_weight = "1";
+        layout_height = "fill";
+        textSize = "12sp";
+        textColor = "#555555";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "You Profile and Settings Tab. Double tap to open.";
+      };
+    };
+  }
+
+  activity.setContentView(loadlayout(mainContainerLayout))
   
-  btnPublicToHome.onClick = function()
-    purgeCloudFeed("data/public_feed.json")
-    purgeEphemeralAudioFiles()
-    publicFeedMessages = {}
-    announce("Returning to Home Dashboard")
-    showDashboardScreen()
-  end
-  
-  btnSavePublicChatLocal.onClick = function()
-    saveChatLocally("PublicFeed", "Global", publicFeedMessages)
-  end
-  
-  setupHoldToRecordVoiceButton(btnRecordPublicVoice, true, "")
-  
-  fetchPublicFeedMessages()
-  
-  btnSendPublicMessage.onClick = function()
-    local text = editPublicMessageInput.getText().toString()
-    if text == "" then
-      announce("Cannot post an empty public message.")
-      return
-    end
-    
-    local payload = {
-      sender = currentUser.name,
-      text = text
-    }
-    
-    editPublicMessageInput.setText("")
-    announce("Posting public message: " .. text)
-    
-    apiPost("/api/public-feed", payload, function(success)
-      fetchPublicFeedMessages()
-    end)
-  end
+  tabBtnHome.onClick = function() switchTab("home") end
+  tabBtnLounge.onClick = function() switchTab("lounge") end
+  tabBtnPublic.onClick = function() switchTab("public") end
+  tabBtnPrivate.onClick = function() switchTab("private") end
+  tabBtnYou.onClick = function() switchTab("you") end
 end
 
-function fetchPublicFeedMessages()
-  apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
-    if success and data and type(data) == "table" then
-      local sorted = sortMessagesChronologically(data)
-      local newCount = #sorted
-      if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
-        local latest = sorted[newCount]
-        if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
-          announce("New public message from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
-        end
+function updateTabButtonsUI(currentTab)
+  local buttons = {
+    home = tabBtnHome,
+    lounge = tabBtnLounge,
+    public = tabBtnPublic,
+    private = tabBtnPrivate,
+    you = tabBtnYou
+  }
+  for name, btn in pairs(buttons) do
+    if btn then
+      if name == currentTab then
+        btn.setTextColor(0xFF075E54)
+        btn.setTypeface(Typeface.DEFAULT_BOLD)
+        btn.setBackgroundColor(0xFFE0F2F1)
+      else
+        btn.setTextColor(0xFF666666)
+        btn.setTypeface(Typeface.DEFAULT)
+        btn.setBackgroundColor(0xFFFFFFFF)
       end
-      lastPublicMessageCount = newCount
-      publicFeedMessages = sorted
+    end
+  end
+end
+
+function switchTab(tabName)
+  activeTab = tabName
+  updateTabButtonsUI(tabName)
+  tabContentContainer.removeAllViews()
+  
+  if tabName == "home" then
+    tabContentContainer.addView(createHomeTabView())
+    announce("Home Tab selected.")
+  elseif tabName == "lounge" then
+    tabContentContainer.addView(createLoungeTabView())
+    fetchGroupsList()
+    announce("Lounge Groups Tab selected.")
+  elseif tabName == "public" then
+    tabContentContainer.addView(createPublicTabView())
+    fetchPublicFeedMessages()
+    announce("Public Lobby Tab selected.")
+  elseif tabName == "private" then
+    tabContentContainer.addView(createPrivateTabView())
+    fetchOnlineUsersList()
+    announce("Private Lobby Tab selected.")
+  elseif tabName == "you" then
+    tabContentContainer.addView(createYouTabView())
+    announce("You Profile & Settings Tab selected.")
+  end
+end
+
+-- --------------------------------------------------------------------
+-- TAB 1: HOME VIEW
+-- --------------------------------------------------------------------
+function createHomeTabView()
+  local viewLayout = {
+    ScrollView;
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "16dp";
+    backgroundColor = "#F4F6F9";
+    {
+      LinearLayout;
+      orientation = "vertical";
+      layout_width = "fill";
+      layout_height = "wrap";
+      {
+        TextView;
+        text = "Welcome back, " .. currentUser.name .. "!";
+        textSize = "22sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_marginBottom = "4dp";
+      };
+      {
+        TextView;
+        text = "● Connected to Realtime Cloud (v" .. APP_VERSION .. ")";
+        textSize = "14sp";
+        textColor = "#2E7D32";
+        layout_marginBottom = "20dp";
+      };
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFFFFF";
+        layout_marginBottom = "14dp";
+        elevation = "2dp";
+        {
+          TextView;
+          text = "🚀 Quick Discovery: Groups Lounge";
+          textSize = "16sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
+        };
+        {
+          TextView;
+          text = "Join public accessibility groups, search topics, or create your own group with privacy & admin approval.";
+          textSize = "13sp";
+          textColor = "#666666";
+          layout_marginTop = "4dp";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnHomeOpenLounge";
+          text = "Explore Lounge Groups";
+          layout_width = "fill";
+          layout_height = "46dp";
+          backgroundColor = "#00897B";
+          textColor = "#FFFFFF";
+        };
+      };
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFFFFF";
+        layout_marginBottom = "14dp";
+        elevation = "2dp";
+        {
+          TextView;
+          text = "🌐 Global Public Lobby";
+          textSize = "16sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
+        };
+        {
+          TextView;
+          text = "Broadcast and read real-time text and HD voice messages across the global accessible community.";
+          textSize = "13sp";
+          textColor = "#666666";
+          layout_marginTop = "4dp";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnHomeOpenPublic";
+          text = "Enter Public Lobby";
+          layout_width = "fill";
+          layout_height = "46dp";
+          backgroundColor = "#128C7E";
+          textColor = "#FFFFFF";
+        };
+      };
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFFFFF";
+        layout_marginBottom = "14dp";
+        elevation = "2dp";
+        {
+          TextView;
+          text = "💬 Active Online 1-on-1 Chats";
+          textSize = "16sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
+        };
+        {
+          TextView;
+          text = "Discover who is currently active and initiate private encrypted voice & text chats.";
+          textSize = "13sp";
+          textColor = "#666666";
+          layout_marginTop = "4dp";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnHomeOpenPrivate";
+          text = "View Online Users";
+          layout_width = "fill";
+          layout_height = "46dp";
+          backgroundColor = "#075E54";
+          textColor = "#FFFFFF";
+        };
+      };
+    };
+  }
+  
+  local view = loadlayout(viewLayout)
+  if btnHomeOpenLounge then btnHomeOpenLounge.onClick = function() switchTab("lounge") end end
+  if btnHomeOpenPublic then btnHomeOpenPublic.onClick = function() switchTab("public") end end
+  if btnHomeOpenPrivate then btnHomeOpenPrivate.onClick = function() switchTab("private") end end
+  return view
+end
+
+-- --------------------------------------------------------------------
+-- TAB 2: LOUNGE (COMMUNITY GROUPS) VIEW
+-- --------------------------------------------------------------------
+function createLoungeTabView()
+  local viewLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "14dp";
+    backgroundColor = "#F4F6F9";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      layout_marginBottom = "10dp";
+      {
+        TextView;
+        text = "🚀 Community Lounge";
+        textSize = "20sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        Button;
+        id = "btnCreateGroupModal";
+        text = "➕ Create Group";
+        textSize = "13sp";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+      };
+    };
+    {
+      EditText;
+      id = "editSearchGroups";
+      hint = "🔍 Search groups by name or topic...";
+      layout_width = "fill";
+      textSize = "15sp";
+      padding = "10dp";
+      backgroundColor = "#FFFFFF";
+      layout_marginBottom = "8dp";
+    };
+    {
+      ListView;
+      id = "listLoungeGroups";
+      layout_width = "fill";
+      layout_weight = "1";
+      dividerHeight = "4dp";
+    };
+  }
+  
+  local view = loadlayout(viewLayout)
+  
+  if btnCreateGroupModal then
+    btnCreateGroupModal.onClick = function()
+      showCreateGroupDialog()
+    end
+  end
+  
+  if editSearchGroups then
+    editSearchGroups.addTextChangedListener({
+      onTextChanged = function(s)
+        groupSearchQuery = string.lower(tostring(s))
+        updateLoungeGroupsUI()
+      end
+    })
+  end
+  
+  return view
+end
+
+function showCreateGroupDialog()
+  local dialogLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "16dp";
+    {
+      TextView;
+      text = "Group Name:";
+      textSize = "14sp";
+      textColor = "#222222";
+    };
+    {
+      EditText;
+      id = "editNewGroupName";
+      hint = "e.g. Android Screen Readers";
+      layout_width = "fill";
+      textSize = "15sp";
+      padding = "10dp";
+      backgroundColor = "#EEEEEE";
+      layout_marginBottom = "10dp";
+    };
+    {
+      TextView;
+      text = "Description / Topic:";
+      textSize = "14sp";
+      textColor = "#222222";
+    };
+    {
+      EditText;
+      id = "editNewGroupDesc";
+      hint = "What is this group about?";
+      layout_width = "fill";
+      textSize = "15sp";
+      padding = "10dp";
+      backgroundColor = "#EEEEEE";
+      layout_marginBottom = "10dp";
+    };
+    {
+      CheckBox;
+      id = "chkGroupPublic";
+      text = "Public Group (Show in Lounge discovery)";
+      checked = true;
+      textSize = "14sp";
+      textColor = "#075E54";
+      layout_marginBottom = "6dp";
+    };
+    {
+      CheckBox;
+      id = "chkGroupApproval";
+      text = "Require Admin Approval to Join";
+      checked = false;
+      textSize = "14sp";
+      textColor = "#075E54";
+    };
+  }
+  
+  local dialogView = loadlayout(dialogLayout)
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Create Community Group")
+  builder.setView(dialogView)
+  builder.setPositiveButton("Create", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local name = editNewGroupName.getText().toString()
+      local desc = editNewGroupDesc.getText().toString()
+      local isPublic = chkGroupPublic.isChecked()
+      local requireApproval = chkGroupApproval.isChecked()
       
-      if activeScreen == "public_feed" and lastRenderedPublicCount ~= newCount then
-        lastRenderedPublicCount = newCount
-        updatePublicFeedUI()
+      if name == "" then
+        announce("Group creation cancelled: Name cannot be empty.")
+        return
+      end
+      
+      local newGroupObj = {
+        id = "grp_" .. os.time(),
+        name = name,
+        desc = desc,
+        creator = currentUser.name,
+        isPublic = isPublic,
+        requireApproval = requireApproval,
+        members = { currentUser.name },
+        pending = {},
+        created_at = os.time()
+      }
+      
+      postFirebaseData("data/groups/" .. newGroupObj.id, newGroupObj, function() end)
+      fetchGitHubFile("data/groups.json", function(ok, currentList)
+        local list = currentList or {}
+        table.insert(list, newGroupObj)
+        commitGitHubFile("data/groups.json", list, "Created group: " .. name, function()
+          announce("Group \"" .. name .. "\" created successfully!")
+          fetchGroupsList()
+        end)
+      end)
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
+end
+
+function fetchGroupsList()
+  apiGet("/api/groups", "data/groups.json", function(success, data)
+    if success and data and type(data) == "table" then
+      groupsList = data
+      if activeTab == "lounge" then
+        updateLoungeGroupsUI()
       end
     end
   end)
 end
 
-function updatePublicFeedUI()
+function updateLoungeGroupsUI()
+  if not listLoungeGroups then return end
+  
+  local filtered = {}
+  for _, g in ipairs(groupsList) do
+    if type(g) == "table" then
+      local name = g.name or ""
+      local desc = g.desc or ""
+      local isMember = false
+      if type(g.members) == "table" then
+        for _, m in ipairs(g.members) do
+          if m == currentUser.name then isMember = true break end
+        end
+      end
+      
+      local matchesSearch = (groupSearchQuery == "") or string.find(string.lower(name), groupSearchQuery) or string.find(string.lower(desc), groupSearchQuery)
+      if (g.isPublic or isMember or g.creator == currentUser.name) and matchesSearch then
+        table.insert(filtered, g)
+      end
+    end
+  end
+  
+  local itemLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "14dp";
+    backgroundColor = "#FFFFFF";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      {
+        TextView;
+        id = "grpTitle";
+        textSize = "16sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "grpBadge";
+        textSize = "12sp";
+        textColor = "#2E7D32";
+      };
+    };
+    {
+      TextView;
+      id = "grpDesc";
+      textSize = "14sp";
+      textColor = "#555555";
+      paddingTop = "4dp";
+    };
+  }
+  
+  local data = {}
+  for _, g in ipairs(filtered) do
+    local memberCount = (type(g.members) == "table") and #g.members or 1
+    local badge = (g.creator == currentUser.name) and "👑 Admin (" .. memberCount .. " mem)" or ("👥 " .. memberCount .. " members")
+    table.insert(data, {
+      grpTitle = g.name or "Group",
+      grpBadge = badge,
+      grpDesc = g.desc or "No description provided."
+    })
+  end
+  
+  local adapter = LuaAdapter(activity, data, itemLayout)
+  listLoungeGroups.setAdapter(adapter)
+  
+  listLoungeGroups.onItemClick = function(p, v, pos, id)
+    local selected = filtered[pos + 1]
+    if selected then
+      openGroupChatScreen(selected)
+    end
+  end
+end
+
+-- --------------------------------------------------------------------
+-- GROUP CHAT ROOM CONTROLLER
+-- --------------------------------------------------------------------
+function openGroupChatScreen(groupObj)
+  activeGroup = groupObj
+  activeTab = "group_chat"
+  lastGroupMessageCount = 0
+  lastRenderedGroupCount = -1
+  
+  local groupChatLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "12dp";
+    backgroundColor = "#E5DDD5";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      padding = "10dp";
+      backgroundColor = "#075E54";
+      {
+        Button;
+        id = "btnBackToLounge";
+        text = "< Lounge";
+        textColor = "#FFFFFF";
+        backgroundColor = "#075E54";
+        ContentDescription = "Back to Lounge groups directory";
+      };
+      {
+        TextView;
+        id = "txtGroupChatHeader";
+        text = groupObj.name or "Group Chat";
+        textSize = "18sp";
+        textColor = "#FFFFFF";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_marginLeft = "8dp";
+        layout_weight = "1";
+      };
+      {
+        Button;
+        id = "btnGroupSettings";
+        text = "⚙️ Admin";
+        textColor = "#FFFFFF";
+        backgroundColor = "#00796B";
+        visibility = (groupObj.creator == currentUser.name) and View.VISIBLE or View.GONE;
+        ContentDescription = "Group Admin Settings";
+      };
+    };
+    {
+      ListView;
+      id = "listGroupMessages";
+      layout_width = "fill";
+      layout_weight = "1";
+      layout_marginTop = "8dp";
+      layout_marginBottom = "8dp";
+      divider = nil;
+      dividerHeight = "0dp";
+      stackFromBottom = true;
+      transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      padding = "4dp";
+      {
+        EditText;
+        id = "editGroupMessageInput";
+        hint = "Message group...";
+        layout_weight = "1";
+        textSize = "16sp";
+        padding = "12dp";
+        backgroundColor = "#FFFFFF";
+      };
+      {
+        Button;
+        id = "btnSendGroupMessage";
+        text = "Send";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        layout_marginLeft = "4dp";
+      };
+      {
+        Button;
+        id = "btnRecordGroupVoice";
+        text = "🎙️";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        textSize = "20sp";
+        layout_width = "50dp";
+        layout_height = "50dp";
+        layout_marginLeft = "6dp";
+      };
+    };
+  }
+
+  activity.setContentView(loadlayout(groupChatLayout))
+  
+  btnBackToLounge.onClick = function()
+    activeGroup = nil
+    showMainAppContainer()
+    switchTab("lounge")
+  end
+  
+  if btnGroupSettings then
+    btnGroupSettings.onClick = function()
+      showGroupAdminSettingsDialog(groupObj)
+    end
+  end
+  
+  setupHoldToRecordVoiceButton(btnRecordGroupVoice, false, groupObj.id, true)
+  
+  fetchGroupChatThread(groupObj.id)
+  
+  btnSendGroupMessage.onClick = function()
+    local text = editGroupMessageInput.getText().toString()
+    if text == "" then
+      announce("Cannot send an empty group message.")
+      return
+    end
+    
+    local payload = {
+      sender = currentUser.name,
+      groupId = groupObj.id,
+      text = text
+    }
+    
+    editGroupMessageInput.setText("")
+    announce("Posting group message: " .. text)
+    
+    apiPost("/api/group-messages", payload, function()
+      fetchGroupChatThread(groupObj.id)
+    end)
+  end
+end
+
+function showGroupAdminSettingsDialog(groupObj)
+  local options = {
+    groupObj.isPublic and "🔒 Set Group to Unlisted (Private)" or "🌐 Set Group to Public",
+    groupObj.requireApproval and "🔓 Disable Member Approval" or "🔐 Enable Member Approval",
+    "🗑️ Delete Group"
+  }
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Group Admin Settings: " .. groupObj.name)
+  builder.setItems(options, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      if w == 0 then
+        groupObj.isPublic = not groupObj.isPublic
+        postFirebaseData("data/groups/" .. groupObj.id, groupObj, function() end)
+        announce("Group visibility updated to " .. (groupObj.isPublic and "Public" or "Unlisted"))
+      elseif w == 1 then
+        groupObj.requireApproval = not groupObj.requireApproval
+        postFirebaseData("data/groups/" .. groupObj.id, groupObj, function() end)
+        announce("Join approval updated to " .. (groupObj.requireApproval and "Required" or "Open"))
+      elseif w == 2 then
+        postFirebaseData("data/groups/" .. groupObj.id, {}, function() end)
+        announce("Group deleted.")
+        showMainAppContainer()
+        switchTab("lounge")
+      end
+    end
+  })
+  builder.show()
+end
+
+function fetchGroupChatThread(groupId)
+  local chatPath = getGroupChatFilePath(groupId)
+  local endpoint = "/api/group-messages?group=" .. groupId
+  
+  apiGet(endpoint, chatPath, function(success, data)
+    if success and data and type(data) == "table" then
+      local sorted = sortMessagesChronologically(data)
+      local newCount = #sorted
+      if newCount > lastGroupMessageCount and lastGroupMessageCount > 0 then
+        local latest = sorted[newCount]
+        if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
+          announce("New message in " .. (activeGroup and activeGroup.name or "group") .. " from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
+        end
+      end
+      lastGroupMessageCount = newCount
+      groupChatHistory[groupId] = sorted
+      
+      if activeTab == "group_chat" and activeGroup and activeGroup.id == groupId and lastRenderedGroupCount ~= newCount then
+        lastRenderedGroupCount = newCount
+        updateGroupChatUI(groupId)
+      end
+    end
+  end)
+end
+
+function updateGroupChatUI(groupId)
+  if not listGroupMessages then return end
+  
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -1463,19 +1957,238 @@ function updatePublicFeedUI()
   }
   
   local data = {}
-  if type(publicFeedMessages) == "table" then
-    for _, m in ipairs(publicFeedMessages) do
-      if type(m) == "table" then
-        local textStr = m.text or ""
-        if m.reaction and m.reaction ~= "" then
-          textStr = textStr .. " [" .. m.reaction .. "]"
-        end
-        table.insert(data, {
-          msgSender = m.sender or "Anonymous",
-          msgTime = m.time or "",
-          msgText = textStr
-        })
+  local msgs = groupChatHistory[groupId] or {}
+  for _, m in ipairs(msgs) do
+    if type(m) == "table" then
+      local textStr = m.text or ""
+      if m.reaction and m.reaction ~= "" then
+        textStr = textStr .. " [" .. m.reaction .. "]"
       end
+      table.insert(data, {
+        msgSender = m.sender or "User",
+        msgTime = m.time or "",
+        msgText = textStr
+      })
+    end
+  end
+  
+  local adapter = LuaAdapter(activity, data, chatItemLayout)
+  listGroupMessages.setAdapter(adapter)
+  
+  listGroupMessages.onItemClick = function(parent, view, position, id)
+    local idx = position + 1
+    local selectedMsg = msgs[idx]
+    if selectedMsg then
+      if selectedMsg.isVoice or selectedMsg.audio or selectedMsg.voicePath then
+        downloadAndPlayVoiceNote(selectedMsg)
+      else
+        announce((selectedMsg.sender or "User") .. ": " .. (selectedMsg.text or ""))
+      end
+    end
+  end
+  
+  listGroupMessages.onItemLongClick = function(parent, view, position, id)
+    local idx = position + 1
+    local selectedMsg = msgs[idx]
+    if selectedMsg then
+      showMessageOptionsDialog(selectedMsg, idx, false, groupId, true)
+    end
+    return true
+  end
+end
+
+-- --------------------------------------------------------------------
+-- TAB 3: PUBLIC LOBBY VIEW
+-- --------------------------------------------------------------------
+function createPublicTabView()
+  lastRenderedPublicCount = -1
+  local viewLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "12dp";
+    backgroundColor = "#E5DDD5";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      padding = "8dp";
+      backgroundColor = "#075E54";
+      {
+        TextView;
+        text = "🌐 Global Public Lobby";
+        textSize = "18sp";
+        textColor = "#FFFFFF";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        Button;
+        id = "btnSavePublicChatLocal";
+        text = "📥 Save";
+        textColor = "#FFFFFF";
+        backgroundColor = "#128C7E";
+      };
+    };
+    {
+      ListView;
+      id = "listPublicMessages";
+      layout_width = "fill";
+      layout_weight = "1";
+      layout_marginTop = "8dp";
+      layout_marginBottom = "8dp";
+      divider = nil;
+      dividerHeight = "0dp";
+      stackFromBottom = true;
+      transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      padding = "4dp";
+      {
+        EditText;
+        id = "editPublicMessageInput";
+        hint = "Type message...";
+        layout_weight = "1";
+        textSize = "16sp";
+        padding = "12dp";
+        backgroundColor = "#FFFFFF";
+      };
+      {
+        Button;
+        id = "btnSendPublicMessage";
+        text = "Post";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        layout_marginLeft = "4dp";
+      };
+      {
+        Button;
+        id = "btnRecordPublicVoice";
+        text = "🎙️";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        textSize = "20sp";
+        layout_width = "50dp";
+        layout_height = "50dp";
+        layout_marginLeft = "6dp";
+      };
+    };
+  }
+  
+  local view = loadlayout(viewLayout)
+  
+  if btnSavePublicChatLocal then
+    btnSavePublicChatLocal.onClick = function()
+      saveChatLocally("PublicFeed", "Global", publicFeedMessages)
+    end
+  end
+  
+  if btnRecordPublicVoice then
+    setupHoldToRecordVoiceButton(btnRecordPublicVoice, true, "")
+  end
+  
+  if btnSendPublicMessage then
+    btnSendPublicMessage.onClick = function()
+      local text = editPublicMessageInput.getText().toString()
+      if text == "" then
+        announce("Cannot post an empty public message.")
+        return
+      end
+      
+      local payload = {
+        sender = currentUser.name,
+        text = text
+      }
+      
+      editPublicMessageInput.setText("")
+      announce("Posting public message: " .. text)
+      
+      apiPost("/api/public-feed", payload, function()
+        fetchPublicFeedMessages()
+      end)
+    end
+  end
+  
+  return view
+end
+
+function fetchPublicFeedMessages()
+  apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
+    if success and data and type(data) == "table" then
+      local sorted = sortMessagesChronologically(data)
+      local newCount = #sorted
+      if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
+        local latest = sorted[newCount]
+        if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
+          announce("New public message from " .. (latest.sender or "User") .. ": " .. (latest.text or ""))
+        end
+      end
+      lastPublicMessageCount = newCount
+      publicFeedMessages = sorted
+      
+      if activeTab == "public" and lastRenderedPublicCount ~= newCount then
+        lastRenderedPublicCount = newCount
+        updatePublicFeedUI()
+      end
+    end
+  end)
+end
+
+function updatePublicFeedUI()
+  if not listPublicMessages then return end
+  
+  local chatItemLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "12dp";
+    backgroundColor = "#FFFFFF";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      {
+        TextView;
+        id = "msgSender";
+        textSize = "14sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "msgTime";
+        textSize = "11sp";
+        textColor = "#888888";
+      };
+    };
+    {
+      TextView;
+      id = "msgText";
+      textSize = "16sp";
+      textColor = "#111111";
+      paddingTop = "4dp";
+    };
+  }
+  
+  local data = {}
+  for _, m in ipairs(publicFeedMessages) do
+    if type(m) == "table" then
+      local textStr = m.text or ""
+      if m.reaction and m.reaction ~= "" then
+        textStr = textStr .. " [" .. m.reaction .. "]"
+      end
+      table.insert(data, {
+        msgSender = m.sender or "Anonymous",
+        msgTime = m.time or "",
+        msgText = textStr
+      })
     end
   end
   
@@ -1505,23 +2218,55 @@ function updatePublicFeedUI()
 end
 
 -- --------------------------------------------------------------------
--- PRIVATE CHATS DIRECTORY CONTROLLER (ONLINE USERS ONLY)
+-- TAB 4: PRIVATE LOBBY VIEW
 -- --------------------------------------------------------------------
-function showPrivateDirectoryScreen()
-  activeScreen = "private_directory"
-  activity.setContentView(loadlayout(privateDirectoryLayout))
+function createPrivateTabView()
+  local viewLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "16dp";
+    backgroundColor = "#FFFFFF";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      layout_marginBottom = "10dp";
+      {
+        TextView;
+        text = "💬 Active Online Users";
+        textSize = "18sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        Button;
+        id = "btnRefreshUsers";
+        text = "Refresh";
+      };
+    };
+    {
+      ListView;
+      id = "listOnlineUsers";
+      layout_width = "fill";
+      layout_height = "fill";
+      dividerHeight = "2dp";
+    };
+  }
   
-  btnPrivateToHome.onClick = function()
-    announce("Returning to Home Dashboard")
-    showDashboardScreen()
+  local view = loadlayout(viewLayout)
+  
+  if btnRefreshUsers then
+    btnRefreshUsers.onClick = function()
+      announce("Refreshing active online users...")
+      fetchOnlineUsersList()
+    end
   end
   
-  fetchOnlineUsersList()
-  
-  btnRefreshUsers.onClick = function()
-    announce("Refreshing active online users directory...")
-    fetchOnlineUsersList()
-  end
+  return view
 end
 
 function fetchOnlineUsersList()
@@ -1544,7 +2289,7 @@ function fetchOnlineUsersList()
         end
       end
       onlineUsersList = filtered
-      if activeScreen == "private_directory" then
+      if activeTab == "private" then
         updatePrivateDirectoryUI()
       end
     end
@@ -1552,6 +2297,8 @@ function fetchOnlineUsersList()
 end
 
 function updatePrivateDirectoryUI()
+  if not listOnlineUsers then return end
+  
   local itemLayout = {
     LinearLayout;
     orientation = "horizontal";
@@ -1563,6 +2310,7 @@ function updatePrivateDirectoryUI()
       id = "itemName";
       textSize = "18sp";
       textColor = "#000000";
+      Typeface = Typeface.DEFAULT_BOLD;
       layout_weight = "1";
     };
     {
@@ -1574,14 +2322,12 @@ function updatePrivateDirectoryUI()
   }
   
   local data = {}
-  if type(onlineUsersList) == "table" then
-    for _, u in ipairs(onlineUsersList) do
-      if type(u) == "table" then
-        table.insert(data, { 
-          itemName = u.name or "User", 
-          itemStatus = "● Online"
-        })
-      end
+  for _, u in ipairs(onlineUsersList) do
+    if type(u) == "table" then
+      table.insert(data, { 
+        itemName = u.name or "User", 
+        itemStatus = "● Online"
+      })
     end
   end
   
@@ -1591,22 +2337,105 @@ function updatePrivateDirectoryUI()
   listOnlineUsers.onItemClick = function(parent, view, position, id)
     local selectedUser = onlineUsersList[position + 1].name
     announce("Opening private chat with " .. selectedUser)
-    showPrivateChatScreen(selectedUser)
+    openPrivateChatScreen(selectedUser)
   end
 end
 
--- --------------------------------------------------------------------
--- PRIVATE CHAT ROOM CONTROLLER
--- --------------------------------------------------------------------
-function showPrivateChatScreen(targetUsername)
-  activeScreen = "private_chat"
+function openPrivateChatScreen(targetUsername)
+  activeTab = "private_chat"
   activeChatTarget = targetUsername
   lastPrivateMessageCount = 0
   lastRenderedPrivateCount = -1
-  activity.setContentView(loadlayout(chatLayout))
   
-  txtChatTargetHeader.setText("Chat: " .. targetUsername)
-  txtChatTargetHeader.setContentDescription("Currently chatting in private room with " .. targetUsername)
+  local chatLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "12dp";
+    backgroundColor = "#E5DDD5";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      padding = "10dp";
+      backgroundColor = "#075E54";
+      {
+        Button;
+        id = "btnBackToPrivateList";
+        text = "< Users";
+        textColor = "#FFFFFF";
+        backgroundColor = "#075E54";
+      };
+      {
+        TextView;
+        id = "txtChatTargetHeader";
+        text = "Chat: " .. targetUsername;
+        textSize = "18sp";
+        textColor = "#FFFFFF";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_marginLeft = "8dp";
+        layout_weight = "1";
+      };
+      {
+        Button;
+        id = "btnSavePrivateChatLocal";
+        text = "📥 Save";
+        textColor = "#FFFFFF";
+        backgroundColor = "#128C7E";
+      };
+    };
+    {
+      ListView;
+      id = "listChatMessages";
+      layout_width = "fill";
+      layout_weight = "1";
+      layout_marginTop = "8dp";
+      layout_marginBottom = "8dp";
+      divider = nil;
+      dividerHeight = "0dp";
+      stackFromBottom = true;
+      transcriptMode = ListView.TRANSCRIPT_MODE_ALWAYS_SCROLL;
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      padding = "4dp";
+      {
+        EditText;
+        id = "editMessageInput";
+        hint = "Type message...";
+        layout_weight = "1";
+        textSize = "16sp";
+        padding = "12dp";
+        backgroundColor = "#FFFFFF";
+      };
+      {
+        Button;
+        id = "btnSendMessage";
+        text = "Send";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        layout_marginLeft = "4dp";
+      };
+      {
+        Button;
+        id = "btnRecordPrivateVoice";
+        text = "🎙️";
+        backgroundColor = "#075E54";
+        textColor = "#FFFFFF";
+        textSize = "20sp";
+        layout_width = "50dp";
+        layout_height = "50dp";
+        layout_marginLeft = "6dp";
+      };
+    };
+  }
+
+  activity.setContentView(loadlayout(chatLayout))
   
   btnSavePrivateChatLocal.onClick = function()
     local msgs = privateChatHistory[targetUsername] or {}
@@ -1614,7 +2443,6 @@ function showPrivateChatScreen(targetUsername)
   end
   
   setupHoldToRecordVoiceButton(btnRecordPrivateVoice, false, targetUsername)
-  
   fetchPrivateChatThread(targetUsername)
   
   btnSendMessage.onClick = function()
@@ -1633,7 +2461,7 @@ function showPrivateChatScreen(targetUsername)
     editMessageInput.setText("")
     announce("Sending private message: " .. text)
     
-    apiPost("/api/private-messages", payload, function(success)
+    apiPost("/api/private-messages", payload, function()
       fetchPrivateChatThread(targetUsername)
     end)
   end
@@ -1644,8 +2472,8 @@ function showPrivateChatScreen(targetUsername)
     purgeEphemeralAudioFiles()
     privateChatHistory[targetUsername] = nil
     activeChatTarget = ""
-    announce("Returning to active online users directory")
-    showPrivateDirectoryScreen()
+    showMainAppContainer()
+    switchTab("private")
   end
 end
 
@@ -1666,7 +2494,7 @@ function fetchPrivateChatThread(targetUsername)
       lastPrivateMessageCount = newCount
       privateChatHistory[targetUsername] = sorted
       
-      if activeScreen == "private_chat" and activeChatTarget == targetUsername and lastRenderedPrivateCount ~= newCount then
+      if activeTab == "private_chat" and activeChatTarget == targetUsername and lastRenderedPrivateCount ~= newCount then
         lastRenderedPrivateCount = newCount
         updatePrivateChatUI(targetUsername)
       end
@@ -1675,6 +2503,8 @@ function fetchPrivateChatThread(targetUsername)
 end
 
 function updatePrivateChatUI(targetUsername)
+  if not listChatMessages then return end
+  
   local chatItemLayout = {
     LinearLayout;
     orientation = "vertical";
@@ -1711,20 +2541,18 @@ function updatePrivateChatUI(targetUsername)
   
   local data = {}
   local msgs = privateChatHistory[targetUsername] or {}
-  if type(msgs) == "table" then
-    for _, m in ipairs(msgs) do
-      if type(m) == "table" then
-        local senderLabel = (m.sender == currentUser.name) and "Me" or (m.sender or targetUsername)
-        local textStr = m.text or ""
-        if m.reaction and m.reaction ~= "" then
-          textStr = textStr .. " [" .. m.reaction .. "]"
-        end
-        table.insert(data, {
-          msgSender = senderLabel,
-          msgTime = m.time or "",
-          msgText = textStr
-        })
+  for _, m in ipairs(msgs) do
+    if type(m) == "table" then
+      local senderLabel = (m.sender == currentUser.name) and "Me" or (m.sender or targetUsername)
+      local textStr = m.text or ""
+      if m.reaction and m.reaction ~= "" then
+        textStr = textStr .. " [" .. m.reaction .. "]"
       end
+      table.insert(data, {
+        msgSender = senderLabel,
+        msgTime = m.time or "",
+        msgText = textStr
+      })
     end
   end
   
@@ -1754,6 +2582,171 @@ function updatePrivateChatUI(targetUsername)
 end
 
 -- --------------------------------------------------------------------
+-- TAB 5: YOU / ME (PROFILE & APP SETTINGS) VIEW
+-- --------------------------------------------------------------------
+function createYouTabView()
+  local viewLayout = {
+    ScrollView;
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "16dp";
+    backgroundColor = "#F4F6F9";
+    {
+      LinearLayout;
+      orientation = "vertical";
+      layout_width = "fill";
+      layout_height = "wrap";
+      {
+        TextView;
+        text = "👤 Your Profile & Settings";
+        textSize = "22sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_marginBottom = "14dp";
+      };
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFFFFF";
+        layout_marginBottom = "14dp";
+        elevation = "2dp";
+        {
+          TextView;
+          text = "Profile Management";
+          textSize = "16sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
+          layout_marginBottom = "8dp";
+        };
+        {
+          TextView;
+          text = "Username: " .. currentUser.name;
+          textSize = "15sp";
+          textColor = "#222222";
+          Typeface = Typeface.DEFAULT_BOLD;
+          layout_marginBottom = "6dp";
+        };
+        {
+          TextView;
+          text = "Custom Bio / Status:";
+          textSize = "13sp";
+          textColor = "#666666";
+        };
+        {
+          EditText;
+          id = "editUserBio";
+          hint = "Set your bio / status...";
+          layout_width = "fill";
+          textSize = "15sp";
+          padding = "10dp";
+          backgroundColor = "#EEEEEE";
+          text = currentUser.bio or "";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnSaveBio";
+          text = "💾 Save Bio & Profile";
+          layout_width = "fill";
+          layout_height = "45dp";
+          backgroundColor = "#00796B";
+          textColor = "#FFFFFF";
+        };
+      };
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFFFFF";
+        layout_marginBottom = "14dp";
+        elevation = "2dp";
+        {
+          TextView;
+          text = "Storage & App Maintenance";
+          textSize = "16sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
+          layout_marginBottom = "8dp";
+        };
+        {
+          Button;
+          id = "btnClearVoiceCache";
+          text = "🗑️ Clean Cached Voice Notes";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#607D8B";
+          textColor = "#FFFFFF";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnCheckAppUpdate";
+          text = "🔄 Check for Updates (v" .. APP_VERSION .. ")";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#455A64";
+          textColor = "#FFFFFF";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnLogoutAndForget";
+          text = "🚪 Disconnect / Remove Saved Account";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#D32F2F";
+          textColor = "#FFFFFF";
+        };
+      };
+    };
+  }
+  
+  local view = loadlayout(viewLayout)
+  
+  if btnSaveBio then
+    btnSaveBio.onClick = function()
+      local bioText = editUserBio.getText().toString()
+      currentUser.bio = bioText
+      announce("Profile bio updated successfully!")
+    end
+  end
+  
+  if btnClearVoiceCache then
+    btnClearVoiceCache.onClick = function()
+      purgeEphemeralAudioFiles()
+      announce("Temporary cached voice notes cleared from storage.")
+    end
+  end
+  
+  if btnCheckAppUpdate then
+    btnCheckAppUpdate.onClick = function()
+      checkForRemoteUpdates(true)
+    end
+  end
+  
+  if btnLogoutAndForget then
+    btnLogoutAndForget.onClick = function()
+      purgeCloudFeed("data/online_users.json")
+      purgeEphemeralAudioFiles()
+      clearSavedCredentials()
+      currentUser.name = ""
+      currentUser.online = false
+      isPolling = false
+      publicFeedMessages = {}
+      privateChatHistory = {}
+      groupChatHistory = {}
+      announce("Disconnected and saved account removed from this device.")
+      showLoginScreen()
+    end
+  end
+  
+  return view
+end
+
+-- --------------------------------------------------------------------
 -- BACKGROUND POLLING LOOP
 -- --------------------------------------------------------------------
 function updateOnlinePresence()
@@ -1769,11 +2762,15 @@ function startPollingLoop()
     
     updateOnlinePresence()
     
-    if activeScreen == "public_feed" then
+    if activeTab == "public" then
       fetchPublicFeedMessages()
-    elseif activeScreen == "private_directory" then
+    elseif activeTab == "lounge" then
+      fetchGroupsList()
+    elseif activeTab == "group_chat" and activeGroup then
+      fetchGroupChatThread(activeGroup.id)
+    elseif activeTab == "private" then
       fetchOnlineUsersList()
-    elseif activeScreen == "private_chat" and activeChatTarget ~= "" then
+    elseif activeTab == "private_chat" and activeChatTarget ~= "" then
       fetchPrivateChatThread(activeChatTarget)
     end
     

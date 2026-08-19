@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "1.8.0",
-                "version_code": 24,
+                "version": "2.0.0",
+                "version_code": 25,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 1.8.0: HD AAC 44.1kHz Audio Recording, Fixed Reply onClick Listener & Strict Chronological Message Sorting."
+                "changelog": "Version 2.0.0: 5-Tab Navigation Architecture, Remember Me Permanent Accounts, and Groups Lounge with Admin Approval & Privacy Controls."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
