@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.4.1",
-                "version_code": 33,
+                "version": "2.4.2",
+                "version_code": 34,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.4.1: Eliminated Chinese Character Glitch on Voice Messages and Standardized Accessible Audio Labels."
+                "changelog": "Version 2.4.2: Fixed ProgressBar Layout Style Error in Live Update Downloader."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

@@ -1,7 +1,7 @@
 {
-  "version": "2.4.1",
-  "version_code": 33,
+  "version": "2.4.2",
+  "version_code": 34,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 2.4.1: Eliminated Chinese Character Glitch on Voice Messages and Standardized Accessible Audio Labels."
+  "changelog": "Version 2.4.2: Fixed ProgressBar Layout Style Error in Live Update Downloader."
 }

@@ -1,8 +1,8 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.4.1 (Build Code: 33)
--- Features: Eliminated Chinese Surrogate Characters on Voice Notes,
+-- Version: 2.4.2 (Build Code: 34)
+-- Features: Fixed ProgressBar layout, Eliminated Chinese Surrogate Characters on Voice Notes,
 --           Startup Splash Screen, Live Interactive Updates, Group Sync & Controls
 -- ====================================================================
 
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.4.1"
-local APP_VERSION_CODE = 33
+local APP_VERSION = "2.4.2"
+local APP_VERSION_CODE = 34
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -595,9 +595,9 @@ function showDownloadProgressScreen(versionStr, downloadUrl)
     };
     {
       ProgressBar;
+      id = "downloadProgressBar";
       layout_width = "fill";
       layout_height = "wrap";
-      style = android.R.attr.progressBarStyleHorizontal;
       indeterminate = true;
     };
     {
