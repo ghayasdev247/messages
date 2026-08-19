@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.5.3",
-                "version_code": 38,
+                "version": "2.6.0",
+                "version_code": 39,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.5.3: Dynamic Runtime Path Detection (activity.getLuaPath) for Guaranteed In-Place Plugin Updates."
+                "changelog": "Version 2.6.0: Added Pause, Resume, and Cancel & Discard Controls to Voice Message Recorder."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

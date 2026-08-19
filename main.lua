@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.5.3"
-local APP_VERSION_CODE = 38
+local APP_VERSION = "2.6.0"
+local APP_VERSION_CODE = 39
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -942,57 +942,149 @@ function downloadAndPlayVoiceNote(msgItem)
   end
 end
 
-function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
+local isVoicePaused = false
+local activeRecordingDialog = nil
+
+function openVoiceRecordingModal(isPublic, targetName, isGroup)
   import "android.media.MediaRecorder"
   
-  btnWidget.setText("🎙️ Voice")
-  btnWidget.setTextColor(0xFFFFFFFF)
-  btnWidget.setContentDescription("Record voice note button. Double tap to start or stop recording.")
+  if isRecordingVoice then return end
   
-  local function startVoiceRecording()
-    if isRecordingVoice then return end
-    local ok = pcall(function()
-      local voiceFolder = getAppAudioDir()
-      voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".m4a"
-      
+  local voiceFolder = getAppAudioDir()
+  voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".m4a"
+  isVoicePaused = false
+  
+  local startOk = pcall(function()
+    mediaRecorder = MediaRecorder()
+    mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+    mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+    mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+    mediaRecorder.setAudioSamplingRate(44100)
+    mediaRecorder.setAudioEncodingBitRate(128000)
+    mediaRecorder.setOutputFile(voiceRecordPath)
+    mediaRecorder.prepare()
+    mediaRecorder.start()
+    isRecordingVoice = true
+  end)
+  
+  if not startOk then
+    pcall(function()
+      voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
       mediaRecorder = MediaRecorder()
       mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-      mediaRecorder.setAudioSamplingRate(44100)
-      mediaRecorder.setAudioEncodingBitRate(128000)
+      mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+      mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
       mediaRecorder.setOutputFile(voiceRecordPath)
       mediaRecorder.prepare()
       mediaRecorder.start()
       isRecordingVoice = true
-      
-      btnWidget.setText("⏹️ Stop")
-      btnWidget.setTextColor(0xFFFFCDD2)
-      btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
-      announce("Recording HD voice note. Speak now, then tap to stop and send.")
     end)
-    if not ok then
-      pcall(function()
-        local voiceFolder = getAppAudioDir()
-        voiceRecordPath = voiceFolder .. "/voice_" .. os.time() .. ".3gp"
-        mediaRecorder = MediaRecorder()
-        mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-        mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-        mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-        mediaRecorder.setOutputFile(voiceRecordPath)
-        mediaRecorder.prepare()
-        mediaRecorder.start()
-        isRecordingVoice = true
-        btnWidget.setText("⏹️ Stop")
-        btnWidget.setTextColor(0xFFFFCDD2)
-        btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
-        announce("Recording voice note. Speak now, then tap to stop and send.")
+  end
+
+  if not isRecordingVoice then
+    announce("Error: Could not access microphone.")
+    return
+  end
+
+  announce("Recording voice note. Speak now.")
+
+  local recLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "20dp";
+    backgroundColor = "#FFFFFF";
+    {
+      TextView;
+      id = "txtRecStatus";
+      text = "🔴 Recording Voice Note...\nSpeak clearly into microphone.";
+      textSize = "16sp";
+      textColor = "#D32F2F";
+      Typeface = Typeface.DEFAULT_BOLD;
+      gravity = "center";
+      layout_marginBottom = "20dp";
+      ContentDescription = "Recording voice note. Speak clearly into microphone.";
+    };
+    {
+      Button;
+      id = "btnRecPauseResume";
+      text = "⏸️ Pause Recording";
+      layout_width = "fill";
+      layout_height = "50dp";
+      backgroundColor = "#FFA000";
+      textColor = "#FFFFFF";
+      textSize = "16sp";
+      layout_marginBottom = "10dp";
+      ContentDescription = "Pause voice recording button";
+    };
+    {
+      Button;
+      id = "btnRecStopAndSend";
+      text = "🚀 Stop & Send";
+      layout_width = "fill";
+      layout_height = "55dp";
+      backgroundColor = "#075E54";
+      textColor = "#FFFFFF";
+      textSize = "18sp";
+      Typeface = Typeface.DEFAULT_BOLD;
+      layout_marginBottom = "10dp";
+      ContentDescription = "Stop and send voice note button";
+    };
+    {
+      Button;
+      id = "btnRecCancel";
+      text = "❌ Cancel & Discard";
+      layout_width = "fill";
+      layout_height = "45dp";
+      backgroundColor = "#757575";
+      textColor = "#FFFFFF";
+      textSize = "14sp";
+      ContentDescription = "Cancel and discard voice recording button";
+    };
+  }
+
+  local dialogView = loadlayout(recLayout)
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("🎙️ Voice Note Recorder")
+  builder.setView(dialogView)
+  builder.setCancelable(false)
+  activeRecordingDialog = builder.create()
+  
+  btnRecPauseResume.onClick = function()
+    if not isVoicePaused then
+      local ok = pcall(function()
+        if mediaRecorder and mediaRecorder.pause then
+          mediaRecorder.pause()
+          isVoicePaused = true
+        end
       end)
+      if ok and isVoicePaused then
+        btnRecPauseResume.setText("▶️ Resume Recording")
+        btnRecPauseResume.setContentDescription("Resume recording button")
+        txtRecStatus.setText("⏸️ Recording Paused.\nTap Resume to continue speaking.")
+        txtRecStatus.setTextColor(0xFFFFA000)
+        announce("Recording paused.")
+      else
+        announce("Pause is not supported on this device.")
+      end
+    else
+      local ok = pcall(function()
+        if mediaRecorder and mediaRecorder.resume then
+          mediaRecorder.resume()
+          isVoicePaused = false
+        end
+      end)
+      if ok and not isVoicePaused then
+        btnRecPauseResume.setText("⏸️ Pause Recording")
+        btnRecPauseResume.setContentDescription("Pause recording button")
+        txtRecStatus.setText("🔴 Recording Voice Note...\nSpeak clearly into microphone.")
+        txtRecStatus.setTextColor(0xFFD32F2F)
+        announce("Recording resumed. Speak now.")
+      end
     end
   end
-  
-  local function stopAndSendVoiceRecording()
-    if not isRecordingVoice then return end
+
+  btnRecStopAndSend.onClick = function()
     pcall(function()
       if mediaRecorder then
         mediaRecorder.stop()
@@ -1001,10 +1093,9 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
       end
     end)
     isRecordingVoice = false
-    btnWidget.setText("🎙️ Voice")
-    btnWidget.setTextColor(0xFFFFFFFF)
-    btnWidget.setContentDescription("Record voice note button. Double tap to record.")
-    
+    isVoicePaused = false
+    if activeRecordingDialog then activeRecordingDialog.dismiss() end
+
     local b64Audio = encodeAudioFileToBase64(voiceRecordPath)
     if b64Audio and #b64Audio > 10 then
       local msgObj = {
@@ -1028,16 +1119,37 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
       end
       announce("Voice message sent successfully!")
     else
-      announce("Voice recording too short or cancelled.")
+      announce("Voice recording too short or empty.")
     end
   end
-  
+
+  btnRecCancel.onClick = function()
+    pcall(function()
+      if mediaRecorder then
+        mediaRecorder.stop()
+        mediaRecorder.release()
+        mediaRecorder = nil
+      end
+    end)
+    pcall(function()
+      local f = File(voiceRecordPath)
+      if f.exists() then f.delete() end
+    end)
+    isRecordingVoice = false
+    isVoicePaused = false
+    if activeRecordingDialog then activeRecordingDialog.dismiss() end
+    announce("Voice recording cancelled and discarded.")
+  end
+
+  activeRecordingDialog.show()
+end
+
+function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
+  btnWidget.setText("🎙️ Voice")
+  btnWidget.setTextColor(0xFFFFFFFF)
+  btnWidget.setContentDescription("Record voice note button. Double tap to open recording controls.")
   btnWidget.onClick = function()
-    if not isRecordingVoice then
-      startVoiceRecording()
-    else
-      stopAndSendVoiceRecording()
-    end
+    openVoiceRecordingModal(isPublic, targetName, isGroup)
   end
 end
 
