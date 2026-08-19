@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.1.0 (Build Code: 26)
--- Features: Active Ghost User Cloud Purge (35s Threshold), Instant Group Creation & Visibility,
---           Jieshuo Smooth UI Signature Guard, Accessible Vertical ListView & 5-Tab Bar
+-- Version: 2.2.0 (Build Code: 29)
+-- Features: Zero-Lag Presence Engine, Message Deduplication,
+--           Instant Lounge Groups Visibility, HD AAC Audio Pipeline
 -- ====================================================================
 
 require "import"
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.1.2"
-local APP_VERSION_CODE = 28
+local APP_VERSION = "2.2.0"
+local APP_VERSION_CODE = 29
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -51,7 +51,6 @@ local lastRenderedPublicCount = -1
 local lastRenderedPrivateCount = -1
 local lastRenderedGroupCount = -1
 local lastRenderedUsersSignature = ""
-local lastHeartbeatTime = 0
 
 -- Audio Recording Global State
 local mediaRecorder = nil
@@ -184,40 +183,44 @@ function base64Encode(data)
 end
 
 function base64Decode(data)
-  if not data or data == "" then return "" end
-  data = data:gsub("[^A-Za-z0-9+/=]", "")
-  local len = #data
-  if len % 4 ~= 0 then return "" end
-  
-  local out = {}
-  local index = 1
-  for i = 1, len, 4 do
-    local c1 = b64lookup[data:sub(i, i)] or 0
-    local c2 = b64lookup[data:sub(i + 1, i + 1)] or 0
-    local c3_char = data:sub(i + 2, i + 2)
-    local c4_char = data:sub(i + 3, i + 3)
+  if not data or data == "" or type(data) ~= "string" then return "" end
+  local ok, res = pcall(function()
+    local clean = data:gsub("[^A-Za-z0-9+/=]", "")
+    local len = #clean
+    if len % 4 ~= 0 then return "" end
     
-    local c3 = (c3_char ~= "=") and (b64lookup[c3_char] or 0) or 0
-    local c4 = (c4_char ~= "=") and (b64lookup[c4_char] or 0) or 0
-    
-    local n = c1 * 262144 + c2 * 4096 + c3 * 64 + c4
-    
-    local b1 = math.floor(n / 65536) % 256
-    local b2 = math.floor(n / 256) % 256
-    local b3 = n % 256
-    
-    out[index] = string.char(b1)
-    index = index + 1
-    if c3_char ~= "=" then
-      out[index] = string.char(b2)
+    local out = {}
+    local index = 1
+    for i = 1, len, 4 do
+      local c1 = b64lookup[clean:sub(i, i)] or 0
+      local c2 = b64lookup[clean:sub(i + 1, i + 1)] or 0
+      local c3_char = clean:sub(i + 2, i + 2)
+      local c4_char = clean:sub(i + 3, i + 3)
+      
+      local c3 = (c3_char ~= "=") and (b64lookup[c3_char] or 0) or 0
+      local c4 = (c4_char ~= "=") and (b64lookup[c4_char] or 0) or 0
+      
+      local n = c1 * 262144 + c2 * 4096 + c3 * 64 + c4
+      
+      local b1 = math.floor(n / 65536) % 256
+      local b2 = math.floor(n / 256) % 256
+      local b3 = n % 256
+      
+      out[index] = string.char(b1)
       index = index + 1
+      if c3_char ~= "=" then
+        out[index] = string.char(b2)
+        index = index + 1
+      end
+      if c4_char ~= "=" then
+        out[index] = string.char(b3)
+        index = index + 1
+      end
     end
-    if c4_char ~= "=" then
-      out[index] = string.char(b3)
-      index = index + 1
-    end
-  end
-  return table.concat(out)
+    return table.concat(out)
+  end)
+  if ok and res then return res end
+  return ""
 end
 
 function encodeAudioFileToBase64(filePath)
@@ -252,9 +255,31 @@ function decodeBase64ToAudioFile(b64Data, targetPath)
   return success
 end
 
-function sortMessagesChronologically(msgList)
+-- --------------------------------------------------------------------
+-- MESSAGE DEDUPLICATION & CHRONOLOGICAL SORTING ENGINE
+-- --------------------------------------------------------------------
+function deduplicateAndSortMessages(msgList)
   if type(msgList) ~= "table" then return {} end
-  table.sort(msgList, function(a, b)
+  local cleanList = {}
+  local seenSignatures = {}
+  
+  for _, m in ipairs(msgList) do
+    if type(m) == "table" then
+      local sender = tostring(m.sender or "")
+      local text = tostring(m.text or "")
+      local timeStr = tostring(m.time or "")
+      local ts = tonumber(m.timestamp or 0) or 0
+      local isVoice = (m.isVoice or m.audio) and "1" or "0"
+      local sig = sender .. "||" .. text .. "||" .. isVoice .. "||" .. (ts > 0 and tostring(ts) or timeStr)
+      
+      if not seenSignatures[sig] then
+        seenSignatures[sig] = true
+        table.insert(cleanList, m)
+      end
+    end
+  end
+  
+  table.sort(cleanList, function(a, b)
     local tA = tonumber(a.timestamp or 0) or 0
     local tB = tonumber(b.timestamp or 0) or 0
     if tA ~= tB and tA > 0 and tB > 0 then
@@ -264,7 +289,8 @@ function sortMessagesChronologically(msgList)
     local kB = tostring(b._fb_key or b.time or "")
     return kA < kB
   end)
-  return msgList
+  
+  return cleanList
 end
 
 function announce(text)
@@ -346,7 +372,6 @@ function purgeCloudFeed(path)
   local fbPath = path:gsub("%.json$", "")
   local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json"
   Http.post(fbUrl, "[]", function() end)
-  commitGitHubFile(path, {}, "Purged ephemeral feed", function() end)
 end
 
 -- --------------------------------------------------------------------
@@ -579,7 +604,6 @@ function fetchFirebaseData(path, callback)
             end
           end
         end
-        list = sortMessagesChronologically(list)
         callback(true, list)
         return
       end
@@ -605,7 +629,7 @@ end
 function apiGet(endpoint, githubFilePath, callback)
   fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
     if fbSuccess and fbData and type(fbData) == "table" and #fbData > 0 then
-      callback(true, sortMessagesChronologically(fbData))
+      callback(true, fbData)
       return
     end
     
@@ -614,18 +638,12 @@ function apiGet(endpoint, githubFilePath, callback)
         local res = decodeJSON(content)
         if res and (res.success or res.messages or res.users or res.groups) then
           local fetched = res.messages or res.users or res.groups or res
-          if type(fetched) == "table" and (string.find(endpoint, "messages") or string.find(endpoint, "feed")) then
-            fetched = sortMessagesChronologically(fetched)
-          end
           callback(true, fetched)
           return
         end
       end
       
       fetchGitHubFile(githubFilePath, function(success, data)
-        if success and type(data) == "table" and (string.find(githubFilePath, "feed") or string.find(githubFilePath, "chats") or string.find(githubFilePath, "groups")) then
-          data = sortMessagesChronologically(data)
-        end
         callback(success, data)
       end)
     end)
@@ -696,7 +714,7 @@ function apiPost(endpoint, payload, callback)
     if username and username ~= "" then
       local now_ts = os.time()
       local userObj = { name = username, last_seen = now_ts, status = "Online" }
-      postFirebaseData("data/online_users/" .. username, userObj, function(fbOk)
+      postFirebaseData("data/online_users", userObj, function(fbOk)
         if callback then callback(true) end
       end)
       Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
@@ -827,7 +845,6 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
         mediaRecorder.start()
         isRecordingVoice = true
         btnWidget.setText("⏹️")
-        btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
         announce("Recording voice note. Speak now, then tap to stop and send.")
       end)
     end
@@ -1624,16 +1641,16 @@ function showCreateGroupDialog()
         created_at = os.time()
       }
       
+      -- Insert locally immediately for zero-lag display
       table.insert(groupsList, 1, newGroupObj)
       updateLoungeGroupsUI()
       
-      postFirebaseData("data/groups/" .. newGroupObj.id, newGroupObj, function() end)
+      postFirebaseData("data/groups", newGroupObj, function() end)
       fetchGitHubFile("data/groups.json", function(ok, currentList)
         local list = currentList or {}
-        table.insert(list, newGroupObj)
+        table.insert(list, 1, newGroupObj)
         commitGitHubFile("data/groups.json", list, "Created group: " .. name, function()
           announce("Group \"" .. name .. "\" created and live!")
-          fetchGroupsList()
         end)
       end)
     end
@@ -1645,7 +1662,29 @@ end
 function fetchGroupsList()
   apiGet("/api/groups", "data/groups.json", function(success, data)
     if success and data and type(data) == "table" then
-      groupsList = data
+      local mergedGroups = {}
+      local seenIds = {}
+      
+      -- Preserve active local groups
+      for _, g in ipairs(groupsList) do
+        if type(g) == "table" and g.id then
+          seenIds[g.id] = true
+          table.insert(mergedGroups, g)
+        end
+      end
+      
+      -- Append newly fetched groups
+      for _, g in ipairs(data) do
+        if type(g) == "table" and g.id and not seenIds[g.id] then
+          seenIds[g.id] = true
+          table.insert(mergedGroups, g)
+        elseif type(g) == "table" and g.name and not seenIds[g.name] then
+          seenIds[g.name] = true
+          table.insert(mergedGroups, g)
+        end
+      end
+      
+      groupsList = mergedGroups
       if activeTab == "lounge" then
         updateLoungeGroupsUI()
       end
@@ -1668,8 +1707,10 @@ function updateLoungeGroupsUI()
         end
       end
       
-      local matchesSearch = (groupSearchQuery == "") or string.find(string.lower(name), groupSearchQuery) or string.find(string.lower(desc), groupSearchQuery)
-      if (g.isPublic or isMember or g.creator == currentUser.name) and matchesSearch then
+      local matchesSearch = (groupSearchQuery == "") or (string.find(string.lower(name), groupSearchQuery, 1, true) ~= nil) or (string.find(string.lower(desc), groupSearchQuery, 1, true) ~= nil)
+      local isAllowed = (g.isPublic == true) or isMember or (g.creator == currentUser.name) or (g.isPublic == nil)
+      
+      if isAllowed and matchesSearch then
         table.insert(filtered, g)
       end
     end
@@ -1716,7 +1757,7 @@ function updateLoungeGroupsUI()
     table.insert(data, {
       grpTitle = g.name or "Group",
       grpBadge = badge,
-      grpDesc = g.desc or "No description provided."
+      grpDesc = (g.desc and g.desc ~= "") and g.desc or "Community Group"
     })
   end
   
@@ -1883,11 +1924,11 @@ function showGroupAdminSettingsDialog(groupObj)
     onClick = function(d, w)
       if w == 0 then
         groupObj.isPublic = not groupObj.isPublic
-        postFirebaseData("data/groups/" .. groupObj.id, groupObj, function() end)
+        postFirebaseData("data/groups", groupObj, function() end)
         announce("Group visibility updated to " .. (groupObj.isPublic and "Public" or "Unlisted"))
       elseif w == 1 then
         groupObj.requireApproval = not groupObj.requireApproval
-        postFirebaseData("data/groups/" .. groupObj.id, groupObj, function() end)
+        postFirebaseData("data/groups", groupObj, function() end)
         announce("Join approval updated to " .. (groupObj.requireApproval and "Required" or "Open"))
       elseif w == 2 then
         postFirebaseData("data/groups/" .. groupObj.id, {}, function() end)
@@ -1906,7 +1947,7 @@ function fetchGroupChatThread(groupId)
   
   apiGet(endpoint, chatPath, function(success, data)
     if success and data and type(data) == "table" then
-      local sorted = sortMessagesChronologically(data)
+      local sorted = deduplicateAndSortMessages(data)
       local newCount = #sorted
       if newCount > lastGroupMessageCount and lastGroupMessageCount > 0 then
         local latest = sorted[newCount]
@@ -2127,7 +2168,7 @@ end
 function fetchPublicFeedMessages()
   apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
     if success and data and type(data) == "table" then
-      local sorted = sortMessagesChronologically(data)
+      local sorted = deduplicateAndSortMessages(data)
       local newCount = #sorted
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
         local latest = sorted[newCount]
@@ -2284,26 +2325,25 @@ function fetchOnlineUsersList()
   apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
     if success and data and type(data) == "table" then
       local filtered = {}
+      local seenMap = {}
       local now_ts = os.time()
+      
       for _, u in ipairs(data) do
         if type(u) == "table" then
           local name = u.name or u.username
           local lastSeen = tonumber(u.last_seen or 0) or 0
-          local isOnline = (now_ts - lastSeen <= 35) and (u.status == "Online" or u.online == true)
+          local isOnline = (now_ts - lastSeen <= 40) and (u.status == "Online" or u.online == true)
           
-          if name and name ~= currentUser.name then
-            if isOnline then
-              table.insert(filtered, {
-                name = name,
-                status = "Online"
-              })
-            else
-              -- Active Ghost User Purge from Firebase Server
-              postFirebaseData("data/online_users/" .. name, {}, function() end)
-            end
+          if name and name ~= currentUser.name and isOnline and not seenMap[name] then
+            seenMap[name] = true
+            table.insert(filtered, {
+              name = name,
+              status = "Online"
+            })
           end
         end
       end
+      
       onlineUsersList = filtered
       if activeTab == "private" then
         updatePrivateDirectoryUI()
@@ -2320,7 +2360,7 @@ function updatePrivateDirectoryUI()
     currentSig = currentSig .. ";" .. (u.name or "")
   end
   if currentSig == lastRenderedUsersSignature and #onlineUsersList > 0 then
-    return -- No change; skip setAdapter to prevent Jieshuo lag
+    return
   end
   lastRenderedUsersSignature = currentSig
   
@@ -2522,7 +2562,7 @@ function fetchPrivateChatThread(targetUsername)
   
   apiGet(endpoint, chatPath, function(success, data)
     if success and data and type(data) == "table" then
-      local sorted = sortMessagesChronologically(data)
+      local sorted = deduplicateAndSortMessages(data)
       local newCount = #sorted
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
         local latest = sorted[newCount]
@@ -2768,7 +2808,6 @@ function createYouTabView()
   
   if btnLogoutAndForget then
     btnLogoutAndForget.onClick = function()
-      postFirebaseData("data/online_users/" .. currentUser.name, {}, function() end)
       purgeEphemeralAudioFiles()
       clearSavedCredentials()
       currentUser.name = ""
