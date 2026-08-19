@@ -1,9 +1,9 @@
 -- ====================================================================
 -- ACCESSIBLE ANONYMOUS MESSENGER FOR JIESHUO / COMMENTARY SCREEN READER
 -- Developed in AndroLua+
--- Version: 2.2.0 (Build Code: 29)
--- Features: Zero-Lag Presence Engine, Message Deduplication,
---           Instant Lounge Groups Visibility, HD AAC Audio Pipeline
+-- Version: 2.3.0 (Build Code: 30)
+-- Features: Multi-Select Add Members with Checkboxes, Group & Message Deduplication,
+--           Permanent Voice Button Labels, Zero-Lag Presence & 5-Tab Navigation
 -- ====================================================================
 
 require "import"
@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.2.0"
-local APP_VERSION_CODE = 29
+local APP_VERSION = "2.3.0"
+local APP_VERSION_CODE = 30
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -265,12 +265,11 @@ function deduplicateAndSortMessages(msgList)
   
   for _, m in ipairs(msgList) do
     if type(m) == "table" then
-      local sender = tostring(m.sender or "")
+      local sender = string.lower(tostring(m.sender or ""))
       local text = tostring(m.text or "")
       local timeStr = tostring(m.time or "")
-      local ts = tonumber(m.timestamp or 0) or 0
-      local isVoice = (m.isVoice or m.audio) and "1" or "0"
-      local sig = sender .. "||" .. text .. "||" .. isVoice .. "||" .. (ts > 0 and tostring(ts) or timeStr)
+      local isVoice = (m.isVoice or m.audio or m.voicePath) and "1" or "0"
+      local sig = sender .. "||" .. text .. "||" .. isVoice .. "||" .. timeStr
       
       if not seenSignatures[sig] then
         seenSignatures[sig] = true
@@ -811,6 +810,10 @@ end
 function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
   import "android.media.MediaRecorder"
   
+  btnWidget.setText("🎙️ Voice")
+  btnWidget.setTextColor(0xFFFFFFFF)
+  btnWidget.setContentDescription("Record voice note button. Double tap to start or stop recording.")
+  
   local function startVoiceRecording()
     if isRecordingVoice then return end
     local ok = pcall(function()
@@ -828,7 +831,8 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
       mediaRecorder.start()
       isRecordingVoice = true
       
-      btnWidget.setText("⏹️")
+      btnWidget.setText("⏹️ Stop")
+      btnWidget.setTextColor(0xFFFFCDD2)
       btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
       announce("Recording HD voice note. Speak now, then tap to stop and send.")
     end)
@@ -844,7 +848,9 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
         mediaRecorder.prepare()
         mediaRecorder.start()
         isRecordingVoice = true
-        btnWidget.setText("⏹️")
+        btnWidget.setText("⏹️ Stop")
+        btnWidget.setTextColor(0xFFFFCDD2)
+        btnWidget.setContentDescription("Recording voice note. Double tap to stop and send.")
         announce("Recording voice note. Speak now, then tap to stop and send.")
       end)
     end
@@ -860,7 +866,8 @@ function setupHoldToRecordVoiceButton(btnWidget, isPublic, targetName, isGroup)
       end
     end)
     isRecordingVoice = false
-    btnWidget.setText("🎙️")
+    btnWidget.setText("🎙️ Voice")
+    btnWidget.setTextColor(0xFFFFFFFF)
     btnWidget.setContentDescription("Record voice note button. Double tap to record.")
     
     local b64Audio = encodeAudioFileToBase64(voiceRecordPath)
@@ -1663,25 +1670,26 @@ function fetchGroupsList()
   apiGet("/api/groups", "data/groups.json", function(success, data)
     if success and data and type(data) == "table" then
       local mergedGroups = {}
-      local seenIds = {}
+      local seenKeys = {}
       
-      -- Preserve active local groups
-      for _, g in ipairs(groupsList) do
-        if type(g) == "table" and g.id then
-          seenIds[g.id] = true
-          table.insert(mergedGroups, g)
+      local function addGroupSafe(g)
+        if type(g) == "table" then
+          local key = string.lower(tostring(g.id or g.name or ""))
+          if key ~= "" and not seenKeys[key] then
+            seenKeys[key] = true
+            table.insert(mergedGroups, g)
+          end
         end
       end
       
-      -- Append newly fetched groups
+      -- Add server groups
       for _, g in ipairs(data) do
-        if type(g) == "table" and g.id and not seenIds[g.id] then
-          seenIds[g.id] = true
-          table.insert(mergedGroups, g)
-        elseif type(g) == "table" and g.name and not seenIds[g.name] then
-          seenIds[g.name] = true
-          table.insert(mergedGroups, g)
-        end
+        addGroupSafe(g)
+      end
+      
+      -- Also preserve any locally created groups
+      for _, g in ipairs(groupsList) do
+        addGroupSafe(g)
       end
       
       groupsList = mergedGroups
@@ -1861,11 +1869,11 @@ function openGroupChatScreen(groupObj)
       {
         Button;
         id = "btnRecordGroupVoice";
-        text = "🎙️";
+        text = "🎙️ Voice";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
-        textSize = "20sp";
-        layout_width = "50dp";
+        textSize = "14sp";
+        layout_width = "75dp";
         layout_height = "50dp";
         layout_marginLeft = "6dp";
       };
@@ -1913,24 +1921,27 @@ end
 
 function showGroupAdminSettingsDialog(groupObj)
   local options = {
+    "👥 Add Online Members to Group",
     groupObj.isPublic and "🔒 Set Group to Unlisted (Private)" or "🌐 Set Group to Public",
     groupObj.requireApproval and "🔓 Disable Member Approval" or "🔐 Enable Member Approval",
     "🗑️ Delete Group"
   }
   
   local builder = AlertDialog.Builder(activity)
-  builder.setTitle("Group Admin Settings: " .. groupObj.name)
+  builder.setTitle("Group Admin Settings: " .. (groupObj.name or "Group"))
   builder.setItems(options, DialogInterface.OnClickListener{
     onClick = function(d, w)
       if w == 0 then
+        showAddMembersDialog(groupObj)
+      elseif w == 1 then
         groupObj.isPublic = not groupObj.isPublic
         postFirebaseData("data/groups", groupObj, function() end)
         announce("Group visibility updated to " .. (groupObj.isPublic and "Public" or "Unlisted"))
-      elseif w == 1 then
+      elseif w == 2 then
         groupObj.requireApproval = not groupObj.requireApproval
         postFirebaseData("data/groups", groupObj, function() end)
         announce("Join approval updated to " .. (groupObj.requireApproval and "Required" or "Open"))
-      elseif w == 2 then
+      elseif w == 3 then
         postFirebaseData("data/groups/" .. groupObj.id, {}, function() end)
         announce("Group deleted.")
         showMainAppContainer()
@@ -1939,6 +1950,86 @@ function showGroupAdminSettingsDialog(groupObj)
     end
   })
   builder.show()
+end
+
+function showAddMembersDialog(groupObj)
+  apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
+    local candidateUsers = {}
+    local now_ts = os.time()
+    local existingMembers = {}
+    if type(groupObj.members) == "table" then
+      for _, m in ipairs(groupObj.members) do
+        existingMembers[tostring(m)] = true
+      end
+    end
+    existingMembers[currentUser.name] = true
+    
+    if success and data and type(data) == "table" then
+      for _, u in ipairs(data) do
+        if type(u) == "table" then
+          local uname = u.name or u.username
+          local lastSeen = tonumber(u.last_seen or 0) or 0
+          if uname and (now_ts - lastSeen <= 40) and not existingMembers[uname] then
+            table.insert(candidateUsers, uname)
+          end
+        end
+      end
+    end
+    
+    if #candidateUsers == 0 then
+      announce("No other online users available to add to this group right now.")
+      return
+    end
+    
+    local selectedMap = {}
+    local namesArray = candidateUsers
+    local checkedArray = {}
+    for i = 1, #namesArray do
+      table.insert(checkedArray, false)
+    end
+    
+    local builder = AlertDialog.Builder(activity)
+    builder.setTitle("Add Online Members to " .. (groupObj.name or "Group"))
+    builder.setMultiChoiceItems(namesArray, checkedArray, DialogInterface.OnMultiChoiceClickListener{
+      onClick = function(dialog, which, isChecked)
+        local uName = namesArray[which + 1]
+        selectedMap[uName] = isChecked
+      end
+    })
+    
+    builder.setPositiveButton("Add Selected", DialogInterface.OnClickListener{
+      onClick = function(dialog, which)
+        local addedCount = 0
+        if type(groupObj.members) ~= "table" then groupObj.members = { currentUser.name } end
+        
+        for _, uName in ipairs(namesArray) do
+          if selectedMap[uName] == true then
+            table.insert(groupObj.members, uName)
+            addedCount = addedCount + 1
+          end
+        end
+        
+        if addedCount > 0 then
+          postFirebaseData("data/groups", groupObj, function() end)
+          fetchGitHubFile("data/groups.json", function(ok, currentList)
+            local list = currentList or {}
+            for i, g in ipairs(list) do
+              if g.id == groupObj.id or g.name == groupObj.name then
+                list[i] = groupObj
+                break
+              end
+            end
+            commitGitHubFile("data/groups.json", list, "Added " .. addedCount .. " members to " .. groupObj.name, function() end)
+          end)
+          announce("Successfully added " .. addedCount .. " member(s) to " .. (groupObj.name or "Group") .. "!")
+        else
+          announce("No members selected.")
+        end
+      end
+    })
+    builder.setNegativeButton("Cancel", nil)
+    builder.show()
+  end)
 end
 
 function fetchGroupChatThread(groupId)
@@ -2117,11 +2208,11 @@ function createPublicTabView()
       {
         Button;
         id = "btnRecordPublicVoice";
-        text = "🎙️";
+        text = "🎙️ Voice";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
-        textSize = "20sp";
-        layout_width = "50dp";
+        textSize = "14sp";
+        layout_width = "75dp";
         layout_height = "50dp";
         layout_marginLeft = "6dp";
       };
@@ -2503,11 +2594,11 @@ function openPrivateChatScreen(targetUsername)
       {
         Button;
         id = "btnRecordPrivateVoice";
-        text = "🎙️";
+        text = "🎙️ Voice";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
-        textSize = "20sp";
-        layout_width = "50dp";
+        textSize = "14sp";
+        layout_width = "75dp";
         layout_height = "50dp";
         layout_marginLeft = "6dp";
       };
