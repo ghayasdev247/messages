@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.1.1",
-                "version_code": 27,
+                "version": "2.1.2",
+                "version_code": 28,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.1.1: Fixed Login Callback Execution & Instant Zero-Delay Authentication."
+                "changelog": "Version 2.1.2: Bulletproof Pure-Lua Base64 Engine & Manual Refresh Signature Reset."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

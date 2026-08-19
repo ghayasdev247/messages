@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.1.1"
-local APP_VERSION_CODE = 27
+local APP_VERSION = "2.1.2"
+local APP_VERSION_CODE = 28
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2272,6 +2272,7 @@ function createPrivateTabView()
   if btnRefreshUsers then
     btnRefreshUsers.onClick = function()
       announce("Refreshing active online users...")
+      lastRenderedUsersSignature = ""
       fetchOnlineUsersList()
     end
   end
