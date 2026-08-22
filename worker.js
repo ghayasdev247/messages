@@ -1,7 +1,7 @@
 /**
  * Cloudflare Worker Backend for Accessible Messenger
  * Handles real-time messaging, online presence, group chats, auto-updates,
- * and Ghost Admin Controls (IP blocking, user banning, password recovery).
+ * user feedback, server diagnostics, and Ghost Admin Controls.
  */
 
 const FIREBASE_DB = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -33,8 +33,8 @@ export default {
     const ipKey = clientIP.replace(/[^a-zA-Z0-9]/g, "_");
 
     try {
-      // 3. Check if IP is Blocked (except for root and version endpoints)
-      if (path !== "/" && path !== "/api/health" && path !== "/api/version" && !path.startsWith("/api/admin")) {
+      // 3. Check if IP is Blocked (except for root, version, ping)
+      if (path !== "/" && path !== "/api/health" && path !== "/api/ping" && path !== "/api/version" && !path.startsWith("/api/admin")) {
         const ipCheckRes = await fetch(`${FIREBASE_DB}/data/blocked_ips/${ipKey}.json`);
         if (ipCheckRes.ok) {
           const ipData = await ipCheckRes.json();
@@ -49,17 +49,31 @@ export default {
         }
       }
 
-      // 4. Client IP query endpoint
+      // 4. Client IP & Latency Ping endpoint
       if (path === "/api/my-ip") {
         return new Response(JSON.stringify({ ip: clientIP }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      if (path === "/api/ping" || path === "/api/server-status") {
+        const maintRes = await fetch(`${FIREBASE_DB}/data/maintenance.json`);
+        const maintData = maintRes.ok ? await maintRes.json() : null;
+        return new Response(JSON.stringify({
+          status: (maintData && maintData.active) ? "maintenance" : "online",
+          server_name: "Accessible Messenger Real-Time Cloud Engine",
+          version: "3.5.0",
+          maintenance: Boolean(maintData && maintData.active),
+          maintenance_message: (maintData && maintData.message) || "Server is temporarily under scheduled maintenance.",
+          client_ip: clientIP,
+          server_time: Date.now()
+        }), { headers: CORS_HEADERS, status: 200 });
       }
 
       // 5. Health check / Root
       if (path === "/" || path === "/api/health") {
         return new Response(JSON.stringify({
           status: "online",
-          service: "Accessible Messenger Cloudflare Serverless Backend",
-          version: "3.4.0",
+          service: "Accessible Messenger Real-Time Cloud Engine",
+          version: "3.5.0",
           client_ip: clientIP,
           timestamp: Date.now()
         }), { headers: CORS_HEADERS, status: 200 });
@@ -76,10 +90,10 @@ export default {
         }
         if (!versionData) {
           versionData = {
-            version: "3.4.0",
-            version_code: 47,
+            version: "3.5.0",
+            version_code: 49,
             download_url: "/api/download-lua",
-            changelog: "Accessible Messenger Ghost Admin Control Center Release."
+            changelog: "Accessible Messenger Help & Feedback Center, Server Speed Diagnostics, and In-App Changelog."
           };
         }
         return new Response(JSON.stringify(versionData), { headers: CORS_HEADERS, status: 200 });
@@ -102,7 +116,39 @@ export default {
         return new Response("Error: main.lua not found.", { status: 404 });
       }
 
-      // 8. Public Feed API
+      // 8. User Feedback & Feature Request API
+      if (path === "/api/feedback") {
+        if (method === "GET") {
+          const fbRes = await fetch(`${FIREBASE_DB}/data/feedbacks.json`);
+          const data = fbRes.ok ? await fbRes.json() : {};
+          let list = [];
+          if (data && typeof data === "object") {
+            list = Array.isArray(data) ? data : Object.values(data);
+          }
+          return new Response(JSON.stringify({ success: true, feedbacks: list }), { headers: CORS_HEADERS, status: 200 });
+        } else if (method === "POST") {
+          const body = await request.json();
+          const fbId = `fb_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+          const fbObj = {
+            id: fbId,
+            sender: body.sender || "Anonymous",
+            type: body.type || "Feature Request",
+            text: body.text || "",
+            time: body.time || new Date().toLocaleTimeString(),
+            timestamp: Math.floor(Date.now() / 1000),
+            ip: clientIP,
+            status: "New"
+          };
+          const fbRes = await fetch(`${FIREBASE_DB}/data/feedbacks/${fbId}.json`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(fbObj)
+          });
+          return new Response(JSON.stringify({ success: fbRes.ok, feedback: fbObj }), { headers: CORS_HEADERS, status: fbRes.ok ? 200 : 500 });
+        }
+      }
+
+      // 9. Public Feed API
       if (path === "/api/public-feed") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/public_feed.json`);
@@ -151,7 +197,7 @@ export default {
         }
       }
 
-      // 9. Online Users & All Users Directory
+      // 10. Online Users & All Users Directory
       if (path === "/api/online-users") {
         const fbRes = await fetch(`${FIREBASE_DB}/data/online_users.json`);
         const data = fbRes.ok ? await fbRes.json() : {};
@@ -186,7 +232,7 @@ export default {
         return new Response(JSON.stringify({ success: true, users: allList }), { headers: CORS_HEADERS, status: 200 });
       }
 
-      // 10. Login & Heartbeat (Tracks IP, Password, and verifies Ban)
+      // 11. Login & Heartbeat (Tracks IP, Password, and verifies Ban)
       if (path === "/api/heartbeat" || path === "/api/login") {
         if (method === "POST") {
           const body = await request.json();
@@ -249,7 +295,7 @@ export default {
         }
       }
 
-      // 11. Private Messages API
+      // 12. Private Messages API
       if (path === "/api/private-messages") {
         const u1 = (url.searchParams.get("user") || "").trim().toLowerCase();
         const u2 = (url.searchParams.get("target") || "").trim().toLowerCase();
@@ -288,7 +334,7 @@ export default {
         }
       }
 
-      // 12. Groups API
+      // 13. Groups API
       if (path === "/api/groups") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/groups.json`);
@@ -320,7 +366,7 @@ export default {
         }
       }
 
-      // 13. Group Chat Messages API
+      // 14. Group Chat Messages API
       if (path === "/api/group-messages") {
         const groupId = url.searchParams.get("group") || "general";
         if (method === "GET") {
@@ -354,7 +400,7 @@ export default {
       }
 
       // ====================================================================
-      // 14. GHOST ADMIN CONTROL ENDPOINTS
+      // 15. GHOST ADMIN CONTROL ENDPOINTS
       // ====================================================================
 
       // Ban / Unban User (10m, 30m, 1h, 24h, Permanent)
@@ -441,6 +487,42 @@ export default {
           list = Array.isArray(data) ? data : Object.values(data);
         }
         return new Response(JSON.stringify({ success: true, blocked_ips: list }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Get all User Feedbacks (Admin Inbox)
+      if (path === "/api/admin/feedbacks" && method === "GET") {
+        const res = await fetch(`${FIREBASE_DB}/data/feedbacks.json`);
+        const data = res.ok ? await res.json() : {};
+        let list = [];
+        if (data && typeof data === "object") {
+          list = Array.isArray(data) ? data : Object.values(data);
+        }
+        return new Response(JSON.stringify({ success: true, feedbacks: list }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Delete / Resolve User Feedback
+      if (path === "/api/admin/delete-feedback" && method === "POST") {
+        const body = await request.json();
+        const fbId = body.id || "";
+        if (fbId) {
+          await fetch(`${FIREBASE_DB}/data/feedbacks/${fbId}.json`, { method: "DELETE" });
+          return new Response(JSON.stringify({ success: true, message: "Feedback resolved." }), { headers: CORS_HEADERS, status: 200 });
+        }
+        return new Response(JSON.stringify({ success: false, error: "Feedback ID required" }), { headers: CORS_HEADERS, status: 400 });
+      }
+
+      // Maintenance Mode Toggle
+      if (path === "/api/admin/maintenance" && method === "POST") {
+        const body = await request.json();
+        const active = Boolean(body.active);
+        const msg = body.message || "Server is temporarily under maintenance.";
+        const maintObj = { active: active, message: msg, updated_at: Math.floor(Date.now() / 1000) };
+        await fetch(`${FIREBASE_DB}/data/maintenance.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(maintObj)
+        });
+        return new Response(JSON.stringify({ success: true, maintenance: maintObj }), { headers: CORS_HEADERS, status: 200 });
       }
 
       // Reset User Password (Admin Password Recovery)

@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.4.1",
-                "version_code": 48,
+                "version": "3.5.0",
+                "version_code": 49,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.4.1: Fixed TextWatcher initialization in Admin Dashboard Search with dedicated Search and Clear Filter controls."
+                "changelog": "Version 3.5.0: Added Help & Feedback Center with Feature Request Submission, Real-time Server Latency Speed Diagnostics, Admin Feedback Inbox, Maintenance Mode Controller, and In-App Changelog."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
