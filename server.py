@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.5.0",
-                "version_code": 49,
+                "version": "3.5.1",
+                "version_code": 50,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.5.0: Added Help & Feedback Center with Feature Request Submission, Real-time Server Latency Speed Diagnostics, Admin Feedback Inbox, Maintenance Mode Controller, and In-App Changelog."
+                "changelog": "Version 3.5.1: Added left/right touch swipe gestures for seeking, non-conflicting smooth slider drag, and dedicated -10s/-5s/+5s/+10s jump buttons."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.5.0"
-local APP_VERSION_CODE = 49
+local APP_VERSION = "3.5.1"
+local APP_VERSION_CODE = 50
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1058,9 +1058,11 @@ function showVoicePlayerDialog(msgItem)
     if activeVoicePlayer then totalDurationMs = activeVoicePlayer.getDuration() end
   end)
   local totalSec = math.floor(totalDurationMs / 1000)
+  local isUserSeeking = false
   
   local playerLayout = {
     LinearLayout;
+    id = "layoutPlayerRoot";
     orientation = "vertical";
     layout_width = "fill";
     padding = "18dp";
@@ -1072,14 +1074,23 @@ function showVoicePlayerDialog(msgItem)
       textColor = "#075E54";
       Typeface = Typeface.DEFAULT_BOLD;
       gravity = "center";
+      layout_marginBottom = "6dp";
+    };
+    {
+      TextView;
+      text = "💡 Drag slider or Swipe Left/Right on screen to seek";
+      textSize = "12sp";
+      textColor = "#757575";
+      gravity = "center";
       layout_marginBottom = "10dp";
     };
     {
       TextView;
       id = "txtPlayerTimeTrack";
       text = "00:00 / " .. formatTimeSeconds(totalSec);
-      textSize = "15sp";
+      textSize = "16sp";
       textColor = "#333333";
+      Typeface = Typeface.DEFAULT_BOLD;
       gravity = "center";
       layout_marginBottom = "10dp";
       ContentDescription = "Voice note duration track";
@@ -1091,7 +1102,7 @@ function showVoicePlayerDialog(msgItem)
       layout_height = "wrap";
       max = (totalSec > 0) and totalSec or 100;
       progress = 0;
-      layout_marginBottom = "16dp";
+      layout_marginBottom = "14dp";
       ContentDescription = "Voice seek slider. Drag right to seek forward, drag left to rewind.";
     };
     {
@@ -1099,18 +1110,75 @@ function showVoicePlayerDialog(msgItem)
       orientation = "horizontal";
       layout_width = "fill";
       gravity = "center";
-      layout_marginBottom = "12dp";
+      layout_marginBottom = "8dp";
+      {
+        Button;
+        id = "btnPlayerRewind10";
+        text = "⏪ -10s";
+        layout_weight = "1";
+        layout_height = "46dp";
+        backgroundColor = "#37474F";
+        textColor = "#FFFFFF";
+        textSize = "12sp";
+        layout_marginRight = "3dp";
+        ContentDescription = "Rewind 10 seconds button";
+      };
       {
         Button;
         id = "btnPlayerRewind";
         text = "⏪ -5s";
         layout_weight = "1";
-        layout_height = "48dp";
+        layout_height = "46dp";
         backgroundColor = "#455A64";
         textColor = "#FFFFFF";
-        textSize = "14sp";
-        layout_marginRight = "6dp";
+        textSize = "12sp";
+        layout_marginLeft = "3dp";
+        layout_marginRight = "3dp";
         ContentDescription = "Rewind 5 seconds button";
+      };
+      {
+        Button;
+        id = "btnPlayerForward";
+        text = "⏩ +5s";
+        layout_weight = "1";
+        layout_height = "46dp";
+        backgroundColor = "#455A64";
+        textColor = "#FFFFFF";
+        textSize = "12sp";
+        layout_marginLeft = "3dp";
+        layout_marginRight = "3dp";
+        ContentDescription = "Forward 5 seconds button";
+      };
+      {
+        Button;
+        id = "btnPlayerForward10";
+        text = "⏩ +10s";
+        layout_weight = "1";
+        layout_height = "46dp";
+        backgroundColor = "#37474F";
+        textColor = "#FFFFFF";
+        textSize = "12sp";
+        layout_marginLeft = "3dp";
+        ContentDescription = "Forward 10 seconds button";
+      };
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center";
+      layout_marginBottom = "10dp";
+      {
+        Button;
+        id = "btnPlayerRestart";
+        text = "⏮️ Start";
+        layout_weight = "1";
+        layout_height = "48dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        textSize = "13sp";
+        layout_marginRight = "4dp";
+        ContentDescription = "Restart voice note from beginning button";
       };
       {
         Button;
@@ -1120,21 +1188,10 @@ function showVoicePlayerDialog(msgItem)
         layout_height = "48dp";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
-        textSize = "16sp";
+        textSize = "15sp";
         Typeface = Typeface.DEFAULT_BOLD;
+        layout_marginLeft = "4dp";
         ContentDescription = "Pause or play voice note button";
-      };
-      {
-        Button;
-        id = "btnPlayerForward";
-        text = "⏩ +5s";
-        layout_weight = "1";
-        layout_height = "48dp";
-        backgroundColor = "#455A64";
-        textColor = "#FFFFFF";
-        textSize = "14sp";
-        layout_marginLeft = "6dp";
-        ContentDescription = "Forward 5 seconds button";
       };
     };
     {
@@ -1156,20 +1213,83 @@ function showVoicePlayerDialog(msgItem)
   builder.setView(dialogView)
   activeVoicePlayerDialog = builder.create()
   
-  playerSeekBar.setOnSeekBarChangeListener(SeekBar.OnSeekBarChangeListener{
-    onProgressChanged = function(seekBar, progress, fromUser)
-      if fromUser and activeVoicePlayer then
-        local seekMs = progress * 1000
-        pcall(function() activeVoicePlayer.seekTo(seekMs) end)
-        if txtPlayerTimeTrack then
-          txtPlayerTimeTrack.setText(formatTimeSeconds(progress) .. " / " .. formatTimeSeconds(totalSec))
+  -- Smooth non-conflicting Drag & Seek on SeekBar
+  pcall(function()
+    playerSeekBar.setOnSeekBarChangeListener(SeekBar.OnSeekBarChangeListener{
+      onProgressChanged = function(seekBar, progress, fromUser)
+        if (fromUser or isUserSeeking) and activeVoicePlayer then
+          local seekMs = progress * 1000
+          pcall(function() activeVoicePlayer.seekTo(seekMs) end)
+          if txtPlayerTimeTrack then
+            txtPlayerTimeTrack.setText(formatTimeSeconds(progress) .. " / " .. formatTimeSeconds(totalSec))
+          end
         end
-        announce("Seek to " .. formatTimeSeconds(progress))
+      end,
+      onStartTrackingTouch = function(seekBar)
+        isUserSeeking = true
+      end,
+      onStopTrackingTouch = function(seekBar)
+        isUserSeeking = false
+        if activeVoicePlayer then
+          local seekMs = seekBar.getProgress() * 1000
+          pcall(function() activeVoicePlayer.seekTo(seekMs) end)
+          announce("Position: " .. formatTimeSeconds(seekBar.getProgress()))
+        end
       end
-    end,
-    onStartTrackingTouch = function(seekBar) end,
-    onStopTrackingTouch = function(seekBar) end
-  })
+    })
+  end)
+
+  -- Touch Swipe Gesture Detector (Swipe Right = Forward 5s, Swipe Left = Rewind 5s)
+  local touchStartX = 0
+  local touchStartY = 0
+  pcall(function()
+    dialogView.setOnTouchListener(View.OnTouchListener{
+      onTouch = function(v, event)
+        local action = event.getAction()
+        if action == 0 then -- ACTION_DOWN
+          touchStartX = event.getX()
+          touchStartY = event.getY()
+          return true
+        elseif action == 1 then -- ACTION_UP
+          local deltaX = event.getX() - touchStartX
+          local deltaY = event.getY() - touchStartY
+          if math.abs(deltaX) > 70 and math.abs(deltaX) > math.abs(deltaY) then
+            if deltaX > 0 then
+              -- Swipe Right -> Forward 5 seconds
+              if activeVoicePlayer then
+                local currentPos = 0
+                pcall(function() currentPos = activeVoicePlayer.getCurrentPosition() end)
+                local newPos = math.min(totalDurationMs, currentPos + 5000)
+                pcall(function() activeVoicePlayer.seekTo(newPos) end)
+                local newSec = math.floor(newPos / 1000)
+                if playerSeekBar then playerSeekBar.setProgress(newSec) end
+                if txtPlayerTimeTrack then
+                  txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
+                end
+                announce("Forwarded 5s: " .. formatTimeSeconds(newSec))
+              end
+            else
+              -- Swipe Left -> Rewind 5 seconds
+              if activeVoicePlayer then
+                local currentPos = 0
+                pcall(function() currentPos = activeVoicePlayer.getCurrentPosition() end)
+                local newPos = math.max(0, currentPos - 5000)
+                pcall(function() activeVoicePlayer.seekTo(newPos) end)
+                local newSec = math.floor(newPos / 1000)
+                if playerSeekBar then playerSeekBar.setProgress(newSec) end
+                if txtPlayerTimeTrack then
+                  txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
+                end
+                announce("Rewound 5s: " .. formatTimeSeconds(newSec))
+              end
+            end
+            return true
+          end
+        end
+        return false
+      end
+    })
+  end)
 
   btnPlayerPlayPause.onClick = function()
     if activeVoicePlayer then
@@ -1184,8 +1304,23 @@ function showVoicePlayerDialog(msgItem)
         pcall(function() activeVoicePlayer.start() end)
         btnPlayerPlayPause.setText("⏸️ Pause")
         btnPlayerPlayPause.setContentDescription("Pause voice note button")
-        announce("Voice note playing.")
+        announce("Voice note resumed.")
       end
+    end
+  end
+
+  btnPlayerRestart.onClick = function()
+    if activeVoicePlayer then
+      pcall(function()
+        activeVoicePlayer.seekTo(0)
+        activeVoicePlayer.start()
+      end)
+      if playerSeekBar then playerSeekBar.setProgress(0) end
+      if txtPlayerTimeTrack then
+        txtPlayerTimeTrack.setText("00:00 / " .. formatTimeSeconds(totalSec))
+      end
+      btnPlayerPlayPause.setText("⏸️ Pause")
+      announce("Restarted voice note from beginning.")
     end
   end
 
@@ -1197,7 +1332,25 @@ function showVoicePlayerDialog(msgItem)
       pcall(function() activeVoicePlayer.seekTo(newPos) end)
       local newSec = math.floor(newPos / 1000)
       if playerSeekBar then playerSeekBar.setProgress(newSec) end
+      if txtPlayerTimeTrack then
+        txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
+      end
       announce("Rewound 5 seconds. Current time: " .. formatTimeSeconds(newSec))
+    end
+  end
+
+  btnPlayerRewind10.onClick = function()
+    if activeVoicePlayer then
+      local currentPos = 0
+      pcall(function() currentPos = activeVoicePlayer.getCurrentPosition() end)
+      local newPos = math.max(0, currentPos - 10000)
+      pcall(function() activeVoicePlayer.seekTo(newPos) end)
+      local newSec = math.floor(newPos / 1000)
+      if playerSeekBar then playerSeekBar.setProgress(newSec) end
+      if txtPlayerTimeTrack then
+        txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
+      end
+      announce("Rewound 10 seconds. Current time: " .. formatTimeSeconds(newSec))
     end
   end
 
@@ -1209,7 +1362,25 @@ function showVoicePlayerDialog(msgItem)
       pcall(function() activeVoicePlayer.seekTo(newPos) end)
       local newSec = math.floor(newPos / 1000)
       if playerSeekBar then playerSeekBar.setProgress(newSec) end
+      if txtPlayerTimeTrack then
+        txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
+      end
       announce("Forwarded 5 seconds. Current time: " .. formatTimeSeconds(newSec))
+    end
+  end
+
+  btnPlayerForward10.onClick = function()
+    if activeVoicePlayer then
+      local currentPos = 0
+      pcall(function() currentPos = activeVoicePlayer.getCurrentPosition() end)
+      local newPos = math.min(totalDurationMs, currentPos + 10000)
+      pcall(function() activeVoicePlayer.seekTo(newPos) end)
+      local newSec = math.floor(newPos / 1000)
+      if playerSeekBar then playerSeekBar.setProgress(newSec) end
+      if txtPlayerTimeTrack then
+        txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
+      end
+      announce("Forwarded 10 seconds. Current time: " .. formatTimeSeconds(newSec))
     end
   end
 
@@ -1221,11 +1392,13 @@ function showVoicePlayerDialog(msgItem)
   local function updateProgressLoop()
     if activeVoicePlayer and activeVoicePlayerDialog and activeVoicePlayerDialog.isShowing() then
       pcall(function()
-        local curMs = activeVoicePlayer.getCurrentPosition()
-        local curSec = math.floor(curMs / 1000)
-        if playerSeekBar then playerSeekBar.setProgress(curSec) end
-        if txtPlayerTimeTrack then
-          txtPlayerTimeTrack.setText(formatTimeSeconds(curSec) .. " / " .. formatTimeSeconds(totalSec))
+        if not isUserSeeking then
+          local curMs = activeVoicePlayer.getCurrentPosition()
+          local curSec = math.floor(curMs / 1000)
+          if playerSeekBar then playerSeekBar.setProgress(curSec) end
+          if txtPlayerTimeTrack then
+            txtPlayerTimeTrack.setText(formatTimeSeconds(curSec) .. " / " .. formatTimeSeconds(totalSec))
+          end
         end
       end)
       Handler().postDelayed(Runnable{ run = updateProgressLoop }, 500)
