@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.5.1"
-local APP_VERSION_CODE = 50
+local APP_VERSION = "3.5.2"
+local APP_VERSION_CODE = 51
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1623,8 +1623,84 @@ end
 -- --------------------------------------------------------------------
 -- LONG-PRESS-ONLY MESSAGE OPTIONS MODAL
 -- --------------------------------------------------------------------
+function openVoiceNoteInExternalApp(msgItem)
+  import "android.content.Intent"
+  import "android.net.Uri"
+  import "java.io.File"
+  
+  if not msgItem then return end
+  local audioData = msgItem.audio or msgItem.voicePath
+  if not audioData or audioData == "" then
+    announce("No audio found in this message.")
+    return
+  end
+  
+  local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", ""):gsub(":", "")
+  local voiceFolder = getAppAudioDir()
+  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
+  local isFileReady = false
+  
+  pcall(function()
+    local fObj = File(targetAudioFile)
+    if fObj.exists() and fObj.length() > 0 then isFileReady = true end
+  end)
+  
+  if not isFileReady then
+    local fallback3gp = voiceFolder .. "/voice_" .. msgHash .. ".3gp"
+    pcall(function()
+      local fObj = File(fallback3gp)
+      if fObj.exists() and fObj.length() > 0 then
+        targetAudioFile = fallback3gp
+        isFileReady = true
+      end
+    end)
+  end
+  
+  if not isFileReady then
+    pcall(function()
+      local fObj = File(audioData)
+      if fObj.exists() and fObj.length() > 0 then
+        targetAudioFile = audioData
+        isFileReady = true
+      end
+    end)
+  end
+  
+  if not isFileReady then
+    announce("Preparing voice note file for external player...")
+    isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
+  end
+  
+  if not isFileReady then
+    announce("Failed to prepare voice file.")
+    return
+  end
+  
+  pcall(function()
+    local audioFile = File(targetAudioFile)
+    local intent = Intent(Intent.ACTION_VIEW)
+    local uri = Uri.fromFile(audioFile)
+    
+    intent.setDataAndType(uri, "audio/*")
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    
+    activity.startActivity(Intent.createChooser(intent, "Open Voice Note With..."))
+    announce("Opening voice note in external player...")
+  end)
+end
+
 function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
-  local options = { "❤️ React with Emoji", "↩️ Reply to Message", "📌 Pin Message", "🗑️ Delete Message" }
+  local isVoice = Boolean(msgItem.isVoice or msgItem.audio or msgItem.voicePath)
+  local options = {}
+  
+  if isVoice then
+    table.insert(options, "🎵 Open in Another App (External Player)")
+  end
+  table.insert(options, "❤️ React with Emoji")
+  table.insert(options, "↩️ Reply to Message")
+  table.insert(options, "📌 Pin Message")
+  table.insert(options, "🗑️ Delete Message")
 
   local builder = AlertDialog.Builder(activity)
   builder.setTitle("Message Options")
@@ -1632,7 +1708,9 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGro
     onClick = function(dialog, which)
       local selectedOption = options[which + 1]
       
-      if string.find(selectedOption, "React") then
+      if string.find(selectedOption, "External") or string.find(selectedOption, "Another App") then
+        openVoiceNoteInExternalApp(msgItem)
+      elseif string.find(selectedOption, "React") then
         showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
       elseif string.find(selectedOption, "Reply") then
         local replyPrefix = string.format("Replying to %s: \"%s\"\n---\n", msgItem.sender or "User", cleanMessageText(msgItem.text, msgItem.isVoice))
@@ -4668,7 +4746,28 @@ function createAdminTabView()
     };
   }
 
-  local view = loadlayout(viewLayout)
+  local view, views = loadlayout(viewLayout)
+  if views then
+    txtAdminMetrics = views.txtAdminMetrics or txtAdminMetrics
+    listAdminUsers = views.listAdminUsers or listAdminUsers
+    btnAdminRefresh = views.btnAdminRefresh or btnAdminRefresh
+    btnAdminBroadcast = views.btnAdminBroadcast or btnAdminBroadcast
+    btnAdminBlockedIps = views.btnAdminBlockedIps or btnAdminBlockedIps
+    btnAdminSpeedTest = views.btnAdminSpeedTest or btnAdminSpeedTest
+    btnAdminFeedbacks = views.btnAdminFeedbacks or btnAdminFeedbacks
+    btnAdminMaintenance = views.btnAdminMaintenance or btnAdminMaintenance
+    btnAdminWipePublic = views.btnAdminWipePublic or btnAdminWipePublic
+    btnAdminFilter = views.btnAdminFilter or btnAdminFilter
+    btnAdminFilterClear = views.btnAdminFilterClear or btnAdminFilterClear
+    editAdminSearch = views.editAdminSearch or editAdminSearch
+  end
+  
+  if not listAdminUsers then
+    listAdminUsers = _ENV.listAdminUsers or listAdminUsers
+  end
+  if not txtAdminMetrics then
+    txtAdminMetrics = _ENV.txtAdminMetrics or txtAdminMetrics
+  end
   
   btnAdminRefresh.onClick = function()
     fetchAdminDashboardData()
@@ -4753,7 +4852,10 @@ function fetchAdminDashboardData()
         for k, v in pairs(uData) do
           if type(v) == "table" then
             v.key = k
+            v.name = v.name or v.username or tostring(k)
             table.insert(allUsers, v)
+          elseif type(v) == "string" then
+            table.insert(allUsers, { name = v, key = k, password = "" })
           end
         end
       end
@@ -4767,10 +4869,29 @@ function fetchAdminDashboardData()
         if type(oData) == "table" then
           for k, v in pairs(oData) do
             if type(v) == "table" then
-              local uName = v.name or v.username
+              local uName = v.name or v.username or tostring(k)
               local lastSeen = tonumber(v.last_seen or 0) or 0
+              local low = string.lower(tostring(uName):gsub("^%s+", ""):gsub("%s+$", ""))
               if uName and (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true) then
-                onlineMap[string.lower(tostring(uName):gsub("^%s+", ""):gsub("%s+$", ""))] = true
+                onlineMap[low] = true
+              end
+              
+              -- Also make sure online users not yet in all_users are listed
+              local exists = false
+              for _, au in ipairs(allUsers) do
+                if string.lower(tostring(au.name or ""):gsub("^%s+", ""):gsub("%s+$", "")) == low then
+                  exists = true
+                  break
+                end
+              end
+              if not exists and uName ~= "" and uName ~= "ghost_admin" then
+                table.insert(allUsers, {
+                  name = uName,
+                  password = "",
+                  ip = v.ip or "Unknown IP",
+                  last_seen = lastSeen,
+                  isOnline = true
+                })
               end
             end
           end
@@ -4780,6 +4901,16 @@ function fetchAdminDashboardData()
       -- 3. Fetch Blocked IPs
       Http.get(FIREBASE_URL .. "/data/blocked_ips.json?t=" .. now_ts, function(bCode, bContent)
         local blockedIps = {}
+        if bCode == 200 and bContent and bContent ~= "null" then
+          local bData = decodeJSON(bContent)
+          if type(bData) == "table" then
+            for k, v in pairs(bData) do
+              if type(v) == "table" then
+                table.insert(blockedIps, v)
+              end
+            end
+          end
+        end
         if bCode == 200 and bContent and bContent ~= "null" then
           local bData = decodeJSON(bContent)
           if type(bData) == "table" then

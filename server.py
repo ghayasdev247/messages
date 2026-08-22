@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.5.1",
-                "version_code": 50,
+                "version": "3.5.2",
+                "version_code": 51,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.5.1: Added left/right touch swipe gestures for seeking, non-conflicting smooth slider drag, and dedicated -10s/-5s/+5s/+10s jump buttons."
+                "changelog": "Version 3.5.2: Fixed Admin Panel user list display and added 'Open in Another App' option on voice message long-press."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
