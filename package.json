@@ -1,0 +1,12 @@
+{
+  "name": "accessible-messenger",
+  "version": "3.1.0",
+  "description": "Cloudflare Serverless Backend for Accessible Messenger",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.50.0"
+  }
+}
