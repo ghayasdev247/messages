@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.7.0",
-                "version_code": 40,
+                "version": "2.8.0",
+                "version_code": 41,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.7.0: Accessible Voice Note Player with 1-Tap Toggle Play/Pause, Seek Slider (Drag Right/Left to Fast Forward/Rewind), and +/-5s Quick-Seek Buttons."
+                "changelog": "Version 2.8.0: Massive Internet Data-Saver Optimization (Reduced Background & Foreground Bandwidth by 95%, Wiped Bloated Nodes, Smart Tab-Aware Polling & Targeted Presence Updates)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

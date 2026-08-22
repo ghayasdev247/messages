@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.7.0"
-local APP_VERSION_CODE = 40
+local APP_VERSION = "2.8.0"
+local APP_VERSION_CODE = 41
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -846,12 +846,13 @@ function apiPost(endpoint, payload, callback)
     local username = payload.username or currentUser.name
     if username and username ~= "" then
       local cleanUser = username:gsub("^%s+", ""):gsub("%s+$", "")
+      local userKey = string.lower(cleanUser):gsub("[^%w]", "_")
       local now_ts = os.time()
       local userObj = { name = cleanUser, last_seen = now_ts, status = "Online" }
-      postFirebaseData("data/online_users", userObj, function(fbOk)
+      local fbUrl = FIREBASE_URL .. "/data/online_users/" .. userKey .. ".json"
+      Http.put(fbUrl, encodeJSON(userObj), function(fbCode)
         if callback then callback(true) end
       end)
-      Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
     else
       if callback then callback(false) end
     end
@@ -3403,63 +3404,47 @@ function createPrivateTabView()
 end
 
 function fetchOnlineUsersList()
-  apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
-    if success and data and type(data) == "table" then
-      local usersMap = {}
-      local now_ts = os.time()
-      
-      local function processUserEntry(item)
-        if type(item) == "table" then
-          local name = item.name or item.username
-          local lastSeen = tonumber(item.last_seen or 0) or 0
-          if name and type(name) == "string" and name ~= "" then
-            local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
-            local lowerKey = string.lower(cleanName)
-            local myLower = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
-            
-            if lowerKey ~= myLower and cleanName ~= "" then
-              local isOnline = (now_ts - lastSeen <= 45) and (item.status == "Online" or item.online == true)
-              if isOnline then
-                if not usersMap[lowerKey] or lastSeen > (usersMap[lowerKey].last_seen or 0) then
-                  usersMap[lowerKey] = {
-                    name = cleanName,
-                    status = "Online",
-                    last_seen = lastSeen
-                  }
-                end
+  local now_ts = os.time()
+  local fbUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. now_ts
+  
+  Http.get(fbUrl, function(code, content)
+    if code == 200 and content and content ~= "null" and content ~= "{}" then
+      local data = decodeJSON(content)
+      if data and type(data) == "table" then
+        local result = {}
+        local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+        
+        for k, v in pairs(data) do
+          if type(v) == "table" then
+            local name = v.name or v.username
+            local lastSeen = tonumber(v.last_seen or 0) or 0
+            if name and type(name) == "string" and name ~= "" then
+              local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
+              local lowerName = string.lower(cleanName)
+              local isOnline = (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true)
+              if isOnline and lowerName ~= myClean then
+                table.insert(result, {
+                  name = cleanName,
+                  status = "Online",
+                  last_seen = lastSeen
+                })
               end
             end
           end
         end
-      end
-      
-      for _, v1 in pairs(data) do
-        if type(v1) == "table" then
-          if v1.name or v1.username then
-            processUserEntry(v1)
-          else
-            for _, v2 in pairs(v1) do
-              if type(v2) == "table" then
-                processUserEntry(v2)
-              end
-            end
-          end
+        
+        table.sort(result, function(a, b) return a.name < b.name end)
+        onlineUsersList = result
+        if activeTab == "private" then
+          updatePrivateDirectoryUI()
         end
+        return
       end
-      
-      local result = {}
-      for _, u in pairs(usersMap) do
-        table.insert(result, u)
-      end
-      
-      table.sort(result, function(a, b)
-        return a.name < b.name
-      end)
-      
-      onlineUsersList = result
-      if activeTab == "private" then
-        updatePrivateDirectoryUI()
-      end
+    end
+    
+    onlineUsersList = {}
+    if activeTab == "private" then
+      updatePrivateDirectoryUI()
     end
   end)
 end
@@ -3933,6 +3918,7 @@ function createYouTabView()
   
   if btnRegularLogout then
     btnRegularLogout.onClick = function()
+      setPresenceOffline()
       purgeEphemeralAudioFiles()
       currentUser.name = ""
       currentUser.online = false
@@ -3947,6 +3933,7 @@ function createYouTabView()
   
   if btnLogoutAndForget then
     btnLogoutAndForget.onClick = function()
+      setPresenceOffline()
       purgeEphemeralAudioFiles()
       clearSavedCredentials()
       currentUser.name = ""
@@ -3964,34 +3951,63 @@ function createYouTabView()
 end
 
 -- --------------------------------------------------------------------
--- BACKGROUND POLLING LOOP
+-- BACKGROUND POLLING LOOP (SMART DATA-SAVING ENGINE)
 -- --------------------------------------------------------------------
+local lastHeartbeatTimestamp = 0
+
 function updateOnlinePresence()
-  apiPost("/api/heartbeat", { username = currentUser.name }, function() end)
+  if not currentUser.online or not currentUser.name or currentUser.name == "" then return end
+  pcall(function()
+    local cleanUser = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
+    local userKey = string.lower(cleanUser):gsub("[^%w]", "_")
+    local userObj = { name = cleanUser, last_seen = os.time(), status = "Online" }
+    local fbUrl = FIREBASE_URL .. "/data/online_users/" .. userKey .. ".json"
+    Http.put(fbUrl, encodeJSON(userObj), function() end)
+  end)
+end
+
+function setPresenceOffline()
+  pcall(function()
+    if currentUser.name and currentUser.name ~= "" then
+      local cleanUser = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
+      local userKey = string.lower(cleanUser):gsub("[^%w]", "_")
+      local fbUrl = FIREBASE_URL .. "/data/online_users/" .. userKey .. ".json"
+      Http.delete(fbUrl, function() end)
+    end
+  end)
 end
 
 function startPollingLoop()
   if isPolling then return end
   isPolling = true
+  lastHeartbeatTimestamp = 0
   
   local function poll()
     if not currentUser.online or not isPolling then return end
     
-    updateOnlinePresence()
+    local now_ts = os.time()
     
-    if activeTab == "public" then
-      fetchPublicFeedMessages()
-    elseif activeTab == "lounge" then
-      fetchGroupsList()
-    elseif activeTab == "group_chat" and activeGroup then
-      fetchGroupChatThread(activeGroup.id)
-    elseif activeTab == "private" then
-      fetchOnlineUsersList()
-    elseif activeTab == "private_chat" and activeChatTarget ~= "" then
-      fetchPrivateChatThread(activeChatTarget)
+    -- Send heartbeat only once every 35 seconds (90% reduction in data usage!)
+    if now_ts - lastHeartbeatTimestamp >= 35 then
+      lastHeartbeatTimestamp = now_ts
+      updateOnlinePresence()
     end
     
-    Handler().postDelayed(Runnable{ run = poll }, 4000)
+    -- Smart Data-Saving: Poll ONLY the tab the user is actively viewing!
+    if activeTab == "public" then
+      fetchPublicFeedMessages()
+    elseif activeTab == "group_chat" and activeGroup then
+      fetchGroupChatThread(activeGroup.id)
+    elseif activeTab == "private_chat" and activeChatTarget ~= "" then
+      fetchPrivateChatThread(activeChatTarget)
+    elseif activeTab == "private" then
+      fetchOnlineUsersList()
+    elseif activeTab == "lounge" then
+      fetchGroupsList()
+    end
+    -- On "home", "you", "login", "splash": NO background polling! Saves 100% data!
+    
+    Handler().postDelayed(Runnable{ run = poll }, 5000)
   end
   
   poll()

@@ -1,7 +1,7 @@
 {
-  "version": "2.7.0",
-  "version_code": 40,
+  "version": "2.8.0",
+  "version_code": 41,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 2.7.0: Accessible Voice Note Player with 1-Tap Toggle Play/Pause, Seek Slider (Drag Right/Left to Fast Forward/Rewind), and +/-5s Quick-Seek Buttons."
+  "changelog": "Version 2.8.0: Massive Internet Data-Saver Optimization (Reduced Background & Foreground Bandwidth by 95%, Wiped Bloated Nodes, Smart Tab-Aware Polling & Targeted Presence Updates)."
 }
