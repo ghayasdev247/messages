@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.4.0"
-local APP_VERSION_CODE = 47
+local APP_VERSION = "3.4.1"
+local APP_VERSION_CODE = 48
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -4384,16 +4384,45 @@ function createAdminTabView()
       };
     };
     {
-      EditText;
-      id = "editAdminSearch";
-      hint = "🔍 Search account by name or IP...";
+      LinearLayout;
+      orientation = "horizontal";
       layout_width = "fill";
-      textSize = "14sp";
-      padding = "10dp";
-      backgroundColor = "#FFFFFF";
       layout_marginBottom = "8dp";
-      elevation = "1dp";
-      ContentDescription = "Search accounts by username or IP address edit box";
+      gravity = "center_vertical";
+      {
+        EditText;
+        id = "editAdminSearch";
+        hint = "🔍 Search account by name or IP...";
+        layout_weight = "1";
+        textSize = "14sp";
+        padding = "10dp";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "Search accounts by username or IP address edit box";
+      };
+      {
+        Button;
+        id = "btnAdminFilter";
+        text = "🔍 Search";
+        layout_width = "80dp";
+        layout_height = "45dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        textSize = "12sp";
+        layout_marginLeft = "4dp";
+        ContentDescription = "Apply search filter button";
+      };
+      {
+        Button;
+        id = "btnAdminFilterClear";
+        text = "✖️";
+        layout_width = "45dp";
+        layout_height = "45dp";
+        backgroundColor = "#78909C";
+        textColor = "#FFFFFF";
+        textSize = "13sp";
+        layout_marginLeft = "4dp";
+        ContentDescription = "Clear search filter button";
+      };
     };
     {
       ListView;
@@ -4438,12 +4467,29 @@ function createAdminTabView()
     confirmBuilder.show()
   end
   
-  editAdminSearch.addTextChangedListener(TextWatcher{
-    onTextChanged = function(s, start, before, count)
-      adminSearchFilter = string.lower(tostring(s):gsub("^%s+", ""):gsub("%s+$", ""))
-      updateAdminUsersListView()
-    end
-  })
+  btnAdminFilter.onClick = function()
+    local q = editAdminSearch.getText().toString()
+    adminSearchFilter = string.lower(q:gsub("^%s+", ""):gsub("%s+$", ""))
+    updateAdminUsersListView()
+    announce("Filtered accounts by: " .. (q ~= "" and q or "All"))
+  end
+  
+  btnAdminFilterClear.onClick = function()
+    editAdminSearch.setText("")
+    adminSearchFilter = ""
+    updateAdminUsersListView()
+    announce("Search filter cleared. Showing all accounts.")
+  end
+  
+  pcall(function()
+    import "android.text.TextWatcher"
+    editAdminSearch.addTextChangedListener(TextWatcher{
+      onTextChanged = function(s, start, before, count)
+        adminSearchFilter = string.lower(tostring(s):gsub("^%s+", ""):gsub("%s+$", ""))
+        updateAdminUsersListView()
+      end
+    })
+  end)
   
   fetchAdminDashboardData()
   return view

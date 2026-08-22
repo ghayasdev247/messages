@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.4.0",
-                "version_code": 47,
+                "version": "3.4.1",
+                "version_code": 48,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.4.0: Master Ghost Admin Control Panel, User Account & Password Recovery, 10m/30m/1h/Permanent Ban System, and IP Address Firewall."
+                "changelog": "Version 3.4.1: Fixed TextWatcher initialization in Admin Dashboard Search with dedicated Search and Clear Filter controls."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
