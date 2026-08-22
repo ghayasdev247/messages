@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.0.0",
-                "version_code": 43,
+                "version": "3.1.0",
+                "version_code": 44,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.0.0: Instant Message Delivery (Sub-200ms Direct Firebase Pipeline, Removed Dead Backend Timeouts & GitHub Commit Overhead) and Zero-Idle Data Saver."
+                "changelog": "Version 3.1.0: Bulletproof Native Android org.json Parser, Restored Public & Group Chat Real-Time Feed, Removed Erroneous Cloud Purging on Exit."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

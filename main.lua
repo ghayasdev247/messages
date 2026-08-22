@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.0.0"
-local APP_VERSION_CODE = 43
+local APP_VERSION = "3.1.0"
+local APP_VERSION_CODE = 44
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -108,48 +108,107 @@ function getGroupChatFilePath(groupId)
 end
 
 -- --------------------------------------------------------------------
--- JSON & FAST CHUNKED BASE64 ENGINE
+-- BULLETPROOF JSON ENGINE (NATIVE ANDROID ORG.JSON + CJSON + PURE-LUA)
 -- --------------------------------------------------------------------
 local jsonModule = nil
 pcall(function() jsonModule = require("cjson") end)
 
 function decodeJSON(str)
-  if not str or str == "" then return nil end
+  if not str or str == "" or str == "null" then return nil end
+  
+  -- 1. Native Android org.json (100% reliable, zero syntax errors on multiline/quotes)
+  local ok, res = pcall(function()
+    import "org.json.JSONTokener"
+    import "org.json.JSONObject"
+    import "org.json.JSONArray"
+    
+    local tokener = JSONTokener(str)
+    local javaVal = tokener.nextValue()
+    
+    local function parseJavaJSON(val)
+      if val == nil or val == JSONObject.NULL then
+        return nil
+      elseif luajava.instanceof(val, JSONObject) then
+        local t = {}
+        local keys = val.keys()
+        while keys.hasNext() do
+          local k = tostring(keys.next())
+          t[k] = parseJavaJSON(val.get(k))
+        end
+        return t
+      elseif luajava.instanceof(val, JSONArray) then
+        local t = {}
+        local len = val.length()
+        for i = 0, len - 1 do
+          table.insert(t, parseJavaJSON(val.get(i)))
+        end
+        return t
+      else
+        return val
+      end
+    end
+    
+    return parseJavaJSON(javaVal)
+  end)
+  if ok and res ~= nil then return res end
+
+  -- 2. cjson module if available
   if jsonModule and jsonModule.decode then
-    local ok, res = pcall(jsonModule.decode, str)
-    if ok then return res end
+    local cOk, cRes = pcall(jsonModule.decode, str)
+    if cOk and cRes ~= nil then return cRes end
   end
-  local ok, res = pcall(loadstring("return " .. str:gsub('"(%w+)":', '["%1"]=')))
-  if ok then return res end
+
   return nil
 end
 
 function encodeJSON(val)
+  if val == nil then return "null" end
   if jsonModule and jsonModule.encode then
     local ok, res = pcall(jsonModule.encode, val)
-    if ok then return res end
+    if ok and res then return res end
   end
-  if type(val) == "table" then
-    local isArray = #val > 0 or next(val) == nil
-    local parts = {}
-    if isArray then
-      for _, item in ipairs(val) do
-        table.insert(parts, encodeJSON(item))
+  
+  local function serialize(v)
+    local t = type(v)
+    if t == "nil" then
+      return "null"
+    elseif t == "boolean" then
+      return v and "true" or "false"
+    elseif t == "number" then
+      return tostring(v)
+    elseif t == "string" then
+      local s = v:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
+      return '"' .. s .. '"'
+    elseif t == "table" then
+      local isArray = true
+      local count = 0
+      for k, _ in pairs(v) do
+        count = count + 1
+        if type(k) ~= "number" or k ~= count then
+          isArray = false
+          break
+        end
       end
-      return "[" .. table.concat(parts, ",") .. "]"
+      if isArray then
+        local items = {}
+        for _, item in ipairs(v) do
+          table.insert(items, serialize(item))
+        end
+        return "[" .. table.concat(items, ",") .. "]"
+      else
+        local items = {}
+        for k, item in pairs(v) do
+          local kStr = '"' .. tostring(k):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+          table.insert(items, kStr .. ":" .. serialize(item))
+        end
+        return "{" .. table.concat(items, ",") .. "}"
+      end
     else
-      for k, v in pairs(val) do
-        table.insert(parts, string.format("%q:%s", tostring(k), encodeJSON(v)))
-      end
-      return "{" .. table.concat(parts, ",") .. "}"
+      return '"' .. tostring(v) .. '"'
     end
-  elseif type(val) == "string" then
-    return string.format("%q", val)
-  elseif type(val) == "number" or type(val) == "boolean" then
-    return tostring(val)
-  else
-    return "null"
   end
+  
+  return serialize(val)
 end
 
 local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -719,7 +778,11 @@ function fetchFirebaseData(path, callback)
   local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
   
   Http.get(fbUrl, function(code, content)
-    if code == 200 and content and content ~= "null" then
+    if code == 200 then
+      if not content or content == "" or content == "null" then
+        callback(true, {})
+        return
+      end
       local fbData = decodeJSON(content)
       if fbData and type(fbData) == "table" then
         local list = {}
@@ -741,7 +804,7 @@ function fetchFirebaseData(path, callback)
         return
       end
     end
-    callback(false, nil)
+    callback(false, {})
   end)
 end
 
