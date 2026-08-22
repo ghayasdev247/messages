@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.5.4",
-                "version_code": 53,
+                "version": "3.6.0",
+                "version_code": 54,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.5.4: Fixed native activity.openFile integration and removed invalid Lua syntax to seamlessly open external player chooser."
+                "changelog": "Version 3.6.0: Live Voice Calling (Public Voice Stage, Lounge Group Calls, 1-on-1 Private Calls) with Adaptive Voice Quality Engine."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

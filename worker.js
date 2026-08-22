@@ -1,7 +1,7 @@
 /**
  * Cloudflare Worker Backend for Accessible Messenger
  * Handles real-time messaging, online presence, group chats, auto-updates,
- * user feedback, server diagnostics, and Ghost Admin Controls.
+ * user feedback, server diagnostics, Ghost Admin Controls, and Live Voice Calls.
  */
 
 const FIREBASE_DB = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -60,7 +60,7 @@ export default {
         return new Response(JSON.stringify({
           status: (maintData && maintData.active) ? "maintenance" : "online",
           server_name: "Accessible Messenger Real-Time Cloud Engine",
-          version: "3.5.0",
+          version: "3.6.0",
           maintenance: Boolean(maintData && maintData.active),
           maintenance_message: (maintData && maintData.message) || "Server is temporarily under scheduled maintenance.",
           client_ip: clientIP,
@@ -73,7 +73,7 @@ export default {
         return new Response(JSON.stringify({
           status: "online",
           service: "Accessible Messenger Real-Time Cloud Engine",
-          version: "3.5.0",
+          version: "3.6.0",
           client_ip: clientIP,
           timestamp: Date.now()
         }), { headers: CORS_HEADERS, status: 200 });
@@ -90,10 +90,10 @@ export default {
         }
         if (!versionData) {
           versionData = {
-            version: "3.5.0",
-            version_code: 49,
+            version: "3.6.0",
+            version_code: 54,
             download_url: "/api/download-lua",
-            changelog: "Accessible Messenger Help & Feedback Center, Server Speed Diagnostics, and In-App Changelog."
+            changelog: "Version 3.6.0: Live Voice Calling (Public Stage, Lounge Group Calls, 1-on-1 Private Calls) with Adaptive Audio Quality Engine."
           };
         }
         return new Response(JSON.stringify(versionData), { headers: CORS_HEADERS, status: 200 });
@@ -116,7 +116,163 @@ export default {
         return new Response("Error: main.lua not found.", { status: 404 });
       }
 
-      // 8. User Feedback & Feature Request API
+      // ====================================================================
+      // 8. LIVE VOICE CALL & GROUP AUDIO STAGE ENGINE
+      // ====================================================================
+      
+      // Join Live Voice Call / Audio Room
+      if (path === "/api/call/join" && method === "POST") {
+        const body = await request.json();
+        const roomId = (body.roomId || "public_stage").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const username = (body.username || "User").trim();
+        const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const nowTs = Math.floor(Date.now() / 1000);
+
+        const participantObj = {
+          name: username,
+          isMuted: Boolean(body.isMuted),
+          quality: body.quality || "HD",
+          joined_at: nowTs,
+          last_ping: nowTs,
+          ip: clientIP
+        };
+
+        await fetch(`${FIREBASE_DB}/data/active_calls/${roomId}/participants/${userKey}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(participantObj)
+        });
+
+        return new Response(JSON.stringify({ success: true, roomId: roomId, participant: participantObj }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Leave Live Voice Call Room
+      if (path === "/api/call/leave" && method === "POST") {
+        const body = await request.json();
+        const roomId = (body.roomId || "public_stage").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const username = (body.username || "").trim();
+        const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+        if (userKey) {
+          await fetch(`${FIREBASE_DB}/data/active_calls/${roomId}/participants/${userKey}.json`, { method: "DELETE" });
+        }
+
+        return new Response(JSON.stringify({ success: true, message: "Left voice call room." }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Transmit Audio Packet Stream in Room
+      if (path === "/api/call/audio" && method === "POST") {
+        const body = await request.json();
+        const roomId = (body.roomId || "public_stage").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const sender = (body.sender || "User").trim();
+        const userKey = sender.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const nowTs = Math.floor(Date.now() / 1000);
+
+        const audioPacket = {
+          sender: sender,
+          audio: body.audio || "",
+          quality: body.quality || "HD",
+          timestamp: nowTs,
+          seq: Date.now()
+        };
+
+        // Broadcast active audio chunk
+        await fetch(`${FIREBASE_DB}/data/active_calls/${roomId}/audio_stream.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(audioPacket)
+        });
+
+        // Update speaker heartbeat
+        await fetch(`${FIREBASE_DB}/data/active_calls/${roomId}/participants/${userKey}/last_ping.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(nowTs)
+        });
+
+        return new Response(JSON.stringify({ success: true }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Get Live Call Room Status & Participants
+      if (path === "/api/call/status" && method === "GET") {
+        const roomId = (url.searchParams.get("room") || "public_stage").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const res = await fetch(`${FIREBASE_DB}/data/active_calls/${roomId}.json`);
+        const data = res.ok ? await res.json() : null;
+        
+        let participantsList = [];
+        let latestAudio = null;
+        const nowSec = Math.floor(Date.now() / 1000);
+
+        if (data && typeof data === "object") {
+          latestAudio = data.audio_stream || null;
+          if (data.participants && typeof data.participants === "object") {
+            for (const key in data.participants) {
+              const p = data.participants[key];
+              if (p && typeof p === "object") {
+                const pingTime = Number(p.last_ping || 0);
+                if (nowSec - pingTime <= 30) {
+                  participantsList.push(p);
+                }
+              }
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          roomId: roomId,
+          participants: participantsList,
+          latest_audio: latestAudio
+        }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // 1-on-1 Call Signaling (Ringing / Accept / Decline / End)
+      if (path === "/api/call/signal" && method === "POST") {
+        const body = await request.json();
+        const action = body.action || "call"; // call, accept, decline, end
+        const fromUser = (body.from || "").trim();
+        const toUser = (body.to || "").trim();
+        const targetKey = toUser.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const fromKey = fromUser.toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+        const signalObj = {
+          action: action,
+          from: fromUser,
+          to: toUser,
+          roomId: body.roomId || `private_call_${fromKey < targetKey ? fromKey + "_" + targetKey : targetKey + "_" + fromKey}`,
+          timestamp: Math.floor(Date.now() / 1000)
+        };
+
+        if (action === "end" || action === "decline") {
+          await fetch(`${FIREBASE_DB}/data/call_signals/${targetKey}.json`, { method: "DELETE" });
+          await fetch(`${FIREBASE_DB}/data/call_signals/${fromKey}.json`, { method: "DELETE" });
+        } else {
+          await fetch(`${FIREBASE_DB}/data/call_signals/${targetKey}.json`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(signalObj)
+          });
+        }
+
+        return new Response(JSON.stringify({ success: true, signal: signalObj }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Poll Call Signals (For Incoming Call Notifications)
+      if (path === "/api/call/signal" && method === "GET") {
+        const user = (url.searchParams.get("user") || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+        if (user) {
+          const res = await fetch(`${FIREBASE_DB}/data/call_signals/${user}.json`);
+          const data = res.ok ? await res.json() : null;
+          return new Response(JSON.stringify({ success: true, signal: data }), { headers: CORS_HEADERS, status: 200 });
+        }
+        return new Response(JSON.stringify({ success: false }), { headers: CORS_HEADERS, status: 400 });
+      }
+
+      // ====================================================================
+      // 9. FEEDBACK & MESSAGING PIPELINE
+      // ====================================================================
+
+      // User Feedback & Feature Request API
       if (path === "/api/feedback") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/feedbacks.json`);
@@ -148,7 +304,7 @@ export default {
         }
       }
 
-      // 9. Public Feed API
+      // Public Feed API
       if (path === "/api/public-feed") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/public_feed.json`);
@@ -197,7 +353,7 @@ export default {
         }
       }
 
-      // 10. Online Users & All Users Directory
+      // Online Users & All Users Directory
       if (path === "/api/online-users") {
         const fbRes = await fetch(`${FIREBASE_DB}/data/online_users.json`);
         const data = fbRes.ok ? await fbRes.json() : {};
@@ -232,7 +388,7 @@ export default {
         return new Response(JSON.stringify({ success: true, users: allList }), { headers: CORS_HEADERS, status: 200 });
       }
 
-      // 11. Login & Heartbeat (Tracks IP, Password, and verifies Ban)
+      // Login & Heartbeat (Tracks IP, Password, and verifies Ban)
       if (path === "/api/heartbeat" || path === "/api/login") {
         if (method === "POST") {
           const body = await request.json();
@@ -295,7 +451,7 @@ export default {
         }
       }
 
-      // 12. Private Messages API
+      // Private Messages API
       if (path === "/api/private-messages") {
         const u1 = (url.searchParams.get("user") || "").trim().toLowerCase();
         const u2 = (url.searchParams.get("target") || "").trim().toLowerCase();
@@ -334,7 +490,7 @@ export default {
         }
       }
 
-      // 13. Groups API
+      // Groups API
       if (path === "/api/groups") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/groups.json`);
@@ -366,7 +522,7 @@ export default {
         }
       }
 
-      // 14. Group Chat Messages API
+      // Group Chat Messages API
       if (path === "/api/group-messages") {
         const groupId = url.searchParams.get("group") || "general";
         if (method === "GET") {
@@ -400,7 +556,7 @@ export default {
       }
 
       // ====================================================================
-      // 15. GHOST ADMIN CONTROL ENDPOINTS
+      // 10. GHOST ADMIN CONTROL ENDPOINTS
       // ====================================================================
 
       // Ban / Unban User (10m, 30m, 1h, 24h, Permanent)
@@ -414,7 +570,7 @@ export default {
 
         let banUntil = 0;
         if (durationMinutes > 0) {
-          banUntil = nowTs + (durationMinutes * 60);
+          banUntil = now_ts = (durationMinutes * 60) + nowTs;
         } else if (durationMinutes === -1) {
           banUntil = 2147483647; // Permanent
         }

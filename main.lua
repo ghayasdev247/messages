@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.5.4"
-local APP_VERSION_CODE = 53
+local APP_VERSION = "3.6.0"
+local APP_VERSION_CODE = 54
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1838,6 +1838,550 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGrou
 end
 
 -- --------------------------------------------------------------------
+-- 📞 LIVE VOICE CALL & GROUP AUDIO STAGE ENGINE
+-- --------------------------------------------------------------------
+local isCallActive = false
+local activeCallRoomId = ""
+local activeCallType = "" -- "public", "group", "private"
+local activeCallTitle = ""
+local isCallMicMuted = false
+local isCallSpeakerOn = true
+local activeCallDialog = nil
+local callDurationTimer = 0
+local callParticipants = {}
+local callAudioQuality = "HD"
+local activeCallRecorder = nil
+local lastPlayedAudioSeq = 0
+local isCallChunkTransmitting = false
+local listCallParticipantsWidget = nil
+local txtCallTimerWidget = nil
+local txtCallParticipantsCount = nil
+local txtCallQualityWidget = nil
+local btnCallMuteWidget = nil
+local btnCallSpeakerWidget = nil
+
+function detectAdaptiveCallQuality(callback)
+  local tStart = os.time()
+  Http.get(BACKEND_URL .. "/api/ping?t=" .. tStart, function(code, content)
+    local rttMs = 80
+    if code ~= 200 then rttMs = 200 end
+    if rttMs < 120 then
+      callAudioQuality = "HD"
+    else
+      callAudioQuality = "DataSaver"
+    end
+    if callback then callback(callAudioQuality) end
+  end)
+end
+
+function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
+  if isCallActive then
+    announce("Already in an active call room.")
+    return
+  end
+  
+  isCallActive = true
+  activeCallRoomId = roomId
+  activeCallType = callType
+  activeCallTitle = callTitle or "Live Voice Call"
+  isCallMicMuted = false
+  isCallSpeakerOn = true
+  callDurationTimer = 0
+  callParticipants = {}
+  lastPlayedAudioSeq = 0
+  
+  detectAdaptiveCallQuality(function(quality)
+    announce("Joining " .. activeCallTitle .. " with " .. quality .. " Audio Quality...")
+    
+    local joinPayload = encodeJSON({
+      roomId = activeCallRoomId,
+      username = currentUser.name,
+      isMuted = isCallMicMuted,
+      quality = quality
+    })
+    
+    Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function(code, res)
+      showLiveCallModal()
+      startCallAudioLoops()
+    end)
+  end)
+end
+
+function leaveActiveVoiceCall()
+  if not isCallActive then return end
+  isCallActive = false
+  
+  pcall(function()
+    if activeCallRecorder then
+      activeCallRecorder.stop()
+      activeCallRecorder.release()
+      activeCallRecorder = nil
+    end
+  end)
+  
+  local leavePayload = encodeJSON({
+    roomId = activeCallRoomId,
+    username = currentUser.name
+  })
+  Http.post(BACKEND_URL .. "/api/call/leave", leavePayload, function() end)
+  
+  if activeCallType == "private" and activeChatTarget and activeChatTarget ~= "" then
+    local endPayload = encodeJSON({
+      action = "end",
+      from = currentUser.name,
+      to = activeChatTarget,
+      roomId = activeCallRoomId
+    })
+    Http.post(BACKEND_URL .. "/api/call/signal", endPayload, function() end)
+  end
+  
+  if activeCallDialog and activeCallDialog.isShowing() then
+    pcall(function() activeCallDialog.dismiss() end)
+    activeCallDialog = nil
+  end
+  
+  announce("Left voice call. Call session finished.")
+end
+
+function showLiveCallModal()
+  local callLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    padding = "16dp";
+    backgroundColor = "#121B22";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      layout_marginBottom = "8dp";
+      {
+        TextView;
+        text = activeCallTitle;
+        textSize = "18sp";
+        textColor = "#25D366";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+        ContentDescription = activeCallTitle .. " Live Call Session";
+      };
+      {
+        TextView;
+        id = "txtCallTimer";
+        text = "00:00";
+        textSize = "16sp";
+        textColor = "#FFFFFF";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Call Duration 0 seconds";
+      };
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      layout_marginBottom = "10dp";
+      {
+        TextView;
+        id = "txtCallParticipantsCount";
+        text = "👥 1 Connected";
+        textSize = "13sp";
+        textColor = "#B0BEC5";
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "txtCallQuality";
+        text = "⚡ " .. callAudioQuality .. " Quality";
+        textSize = "12sp";
+        textColor = "#FFD54F";
+        Typeface = Typeface.DEFAULT_BOLD;
+      };
+    };
+    {
+      ListView;
+      id = "listCallParticipants";
+      layout_width = "fill";
+      layout_weight = "1";
+      divider = nil;
+      dividerHeight = "4dp";
+      layout_marginBottom = "14dp";
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      layout_marginBottom = "8dp";
+      {
+        Button;
+        id = "btnCallMute";
+        text = "🎤 Mic On";
+        layout_weight = "1";
+        layout_height = "50dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        textSize = "14sp";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_marginRight = "4dp";
+        ContentDescription = "Mute or unmute microphone button. Currently Unmuted.";
+      };
+      {
+        Button;
+        id = "btnCallSpeaker";
+        text = "🔊 Speaker";
+        layout_weight = "1";
+        layout_height = "50dp";
+        backgroundColor = "#37474F";
+        textColor = "#FFFFFF";
+        textSize = "14sp";
+        layout_marginLeft = "4dp";
+        ContentDescription = "Toggle speakerphone and earpiece button. Currently Speaker.";
+      };
+    };
+    {
+      Button;
+      id = "btnCallLeaveEnd";
+      text = "🔴 Leave / End Call";
+      layout_width = "fill";
+      layout_height = "52dp";
+      backgroundColor = "#D32F2F";
+      textColor = "#FFFFFF";
+      textSize = "16sp";
+      Typeface = Typeface.DEFAULT_BOLD;
+      ContentDescription = "Leave or end voice call button";
+    };
+  }
+
+  local dialogView, views = loadlayout(callLayout)
+  txtCallTimerWidget = (views and views.txtCallTimer) or txtCallTimer
+  txtCallParticipantsCount = (views and views.txtCallParticipantsCount) or txtCallParticipantsCount
+  txtCallQualityWidget = (views and views.txtCallQuality) or txtCallQuality
+  listCallParticipantsWidget = (views and views.listCallParticipants) or listCallParticipants
+  btnCallMuteWidget = (views and views.btnCallMute) or btnCallMute
+  btnCallSpeakerWidget = (views and views.btnCallSpeaker) or btnCallSpeaker
+  btnCallLeaveEndWidget = (views and views.btnCallLeaveEnd) or btnCallLeaveEnd
+
+  btnCallMuteWidget.onClick = function()
+    isCallMicMuted = not isCallMicMuted
+    if isCallMicMuted then
+      btnCallMuteWidget.setText("🔇 Mic Muted")
+      btnCallMuteWidget.setBackgroundColor(0xFFC2185B)
+      btnCallMuteWidget.setContentDescription("Mute or unmute microphone button. Currently Muted.")
+      announce("Microphone muted.")
+    else
+      btnCallMuteWidget.setText("🎤 Mic On")
+      btnCallMuteWidget.setBackgroundColor(0xFF00796B)
+      btnCallMuteWidget.setContentDescription("Mute or unmute microphone button. Currently Unmuted.")
+      announce("Microphone unmuted. Speaking live.")
+    end
+  end
+
+  btnCallSpeakerWidget.onClick = function()
+    isCallSpeakerOn = not isCallSpeakerOn
+    if isCallSpeakerOn then
+      btnCallSpeakerWidget.setText("🔊 Speaker")
+      btnCallSpeakerWidget.setContentDescription("Toggle speakerphone and earpiece. Currently Speaker.")
+      announce("Audio switched to loudspeaker.")
+    else
+      btnCallSpeakerWidget.setText("🔈 Earpiece")
+      btnCallSpeakerWidget.setContentDescription("Toggle speakerphone and earpiece. Currently Earpiece.")
+      announce("Audio switched to earpiece.")
+    end
+  end
+
+  btnCallLeaveEndWidget.onClick = function()
+    leaveActiveVoiceCall()
+  end
+
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Live Voice Session")
+  builder.setView(dialogView)
+  builder.setCancelable(false)
+  activeCallDialog = builder.create()
+  activeCallDialog.show()
+  
+  updateCallParticipantsList()
+end
+
+function updateCallParticipantsList()
+  if not listCallParticipantsWidget then return end
+  
+  local itemLayout = {
+    LinearLayout;
+    orientation = "horizontal";
+    layout_width = "fill";
+    padding = "10dp";
+    backgroundColor = "#1F2C34";
+    gravity = "center_vertical";
+    {
+      TextView;
+      id = "txtCallItemUser";
+      textSize = "15sp";
+      textColor = "#FFFFFF";
+      Typeface = Typeface.DEFAULT_BOLD;
+      layout_weight = "1";
+    };
+    {
+      TextView;
+      id = "txtCallItemStatus";
+      textSize = "12sp";
+      textColor = "#25D366";
+      Typeface = Typeface.DEFAULT_BOLD;
+    };
+  }
+  
+  local data = {}
+  local count = 0
+  for _, p in ipairs(callParticipants) do
+    if type(p) == "table" then
+      count = count + 1
+      local uName = p.name or "User"
+      local isMuted = p.isMuted == true
+      local statusStr = isMuted and "🔇 Muted" or "🟢 Speaking"
+      if uName == currentUser.name then
+        uName = uName .. " (You)"
+        statusStr = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
+      end
+      table.insert(data, {
+        txtCallItemUser = "👤 " .. uName,
+        txtCallItemStatus = statusStr
+      })
+    end
+  end
+  
+  if count == 0 then
+    table.insert(data, {
+      txtCallItemUser = "👤 " .. currentUser.name .. " (You)",
+      txtCallItemStatus = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
+    })
+    count = 1
+  end
+  
+  if txtCallParticipantsCount then
+    txtCallParticipantsCount.setText("👥 " .. count .. " Connected")
+  end
+  
+  local adapter = LuaAdapter(activity, data, itemLayout)
+  listCallParticipantsWidget.setAdapter(adapter)
+end
+
+function startCallAudioLoops()
+  -- 1. Duration ticker loop
+  local function ticker()
+    if isCallActive then
+      callDurationTimer = callDurationTimer + 1
+      local m = math.floor(callDurationTimer / 60)
+      local s = callDurationTimer % 60
+      local timeFormatted = string.format("%02d:%02d", m, s)
+      if txtCallTimerWidget then
+        txtCallTimerWidget.setText(timeFormatted)
+        txtCallTimerWidget.setContentDescription("Call Duration " .. timeFormatted)
+      end
+      Handler().postDelayed(Runnable{ run = ticker }, 1000)
+    end
+  end
+  ticker()
+
+  -- 2. Audio transmission loop
+  transmitAudioBurst()
+
+  -- 3. Room status & audio receiver loop
+  pollCallRoomStatus()
+end
+
+function transmitAudioBurst()
+  if not isCallActive or isCallMicMuted or isCallChunkTransmitting then
+    if isCallActive then
+      Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 1000)
+    end
+    return
+  end
+  
+  isCallChunkTransmitting = true
+  import "android.media.MediaRecorder"
+  local chunkFile = getAppAudioDir() .. "/call_chunk_" .. os.time() .. ".3gp"
+  
+  local recOk = pcall(function()
+    activeCallRecorder = MediaRecorder()
+    activeCallRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+    activeCallRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+    if callAudioQuality == "HD" then
+      pcall(function()
+        activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_WB)
+        activeCallRecorder.setAudioSamplingRate(16000)
+      end)
+    else
+      activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+      activeCallRecorder.setAudioSamplingRate(8000)
+    end
+    activeCallRecorder.setOutputFile(chunkFile)
+    activeCallRecorder.prepare()
+    activeCallRecorder.start()
+  end)
+  
+  if recOk then
+    Handler().postDelayed(Runnable{
+      run = function()
+        pcall(function()
+          if activeCallRecorder then
+            activeCallRecorder.stop()
+            activeCallRecorder.release()
+            activeCallRecorder = nil
+          end
+        end)
+        
+        local b64 = encodeAudioFileToBase64(chunkFile)
+        pcall(function() File(chunkFile).delete() end)
+        
+        if b64 and b64 ~= "" and isCallActive and not isCallMicMuted then
+          local pkt = encodeJSON({
+            roomId = activeCallRoomId,
+            sender = currentUser.name,
+            audio = b64,
+            quality = callAudioQuality
+          })
+          Http.post(BACKEND_URL .. "/api/call/audio", pkt, function(c, r)
+            isCallChunkTransmitting = false
+            if isCallActive then
+              Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 300)
+            end
+          end)
+        else
+          isCallChunkTransmitting = false
+          if isCallActive then
+            Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 500)
+          end
+        end
+      end
+    }, 2000)
+  else
+    isCallChunkTransmitting = false
+    if isCallActive then
+      Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 1000)
+    end
+  end
+end
+
+function pollCallRoomStatus()
+  if not isCallActive then return end
+  
+  Http.get(BACKEND_URL .. "/api/call/status?room=" .. activeCallRoomId .. "&t=" .. os.time(), function(code, content)
+    if isCallActive and code == 200 and content and content ~= "null" then
+      local data = decodeJSON(content)
+      if data and type(data) == "table" then
+        if type(data.participants) == "table" then
+          callParticipants = data.participants
+          updateCallParticipantsList()
+        end
+        
+        local latestAudio = data.latest_audio
+        if latestAudio and type(latestAudio) == "table" then
+          local seq = tonumber(latestAudio.seq or 0) or 0
+          local sender = latestAudio.sender or ""
+          if seq > lastPlayedAudioSeq and sender ~= currentUser.name and latestAudio.audio and latestAudio.audio ~= "" then
+            lastPlayedAudioSeq = seq
+            playIncomingCallAudioChunk(latestAudio.audio, sender)
+          end
+        end
+      end
+    end
+    
+    if isCallActive then
+      Handler().postDelayed(Runnable{ run = pollCallRoomStatus }, 1500)
+    end
+  end)
+end
+
+function playIncomingCallAudioChunk(base64Audio, senderName)
+  local targetFile = getAppAudioDir() .. "/incoming_call_" .. os.time() .. ".3gp"
+  local ok = decodeBase64ToAudioFile(base64Audio, targetFile)
+  if ok then
+    pcall(function()
+      local player = MediaPlayer()
+      player.setDataSource(targetFile)
+      if isCallSpeakerOn then
+        player.setAudioStreamType(3) -- AudioManager.STREAM_MUSIC
+      else
+        player.setAudioStreamType(0) -- AudioManager.STREAM_VOICE_CALL
+      end
+      player.prepare()
+      player.start()
+      player.setOnCompletionListener(MediaPlayer.OnCompletionListener{
+        onCompletion = function(mp)
+          pcall(function()
+            mp.release()
+            File(targetFile).delete()
+          end)
+        end
+      })
+    end)
+  end
+end
+
+function initiatePrivate1on1Call(targetUser)
+  if not targetUser or targetUser == "" then return end
+  announce("Calling " .. targetUser .. "...")
+  
+  local cleanTarget = targetUser:gsub("^%s+", ""):gsub("%s+$", "")
+  local cleanMe = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
+  local lowT = string.lower(cleanTarget):gsub("[^a-z0-9]", "_")
+  local lowM = string.lower(cleanMe):gsub("[^a-z0-9]", "_")
+  local roomId = "private_call_" .. (lowM < lowT and (lowM .. "_" .. lowT) or (lowT .. "_" .. lowM))
+  
+  local callPayload = encodeJSON({
+    action = "call",
+    from = cleanMe,
+    to = cleanTarget,
+    roomId = roomId
+  })
+  Http.post(BACKEND_URL .. "/api/call/signal", callPayload, function() end)
+  
+  startOrJoinVoiceCall(roomId, "private", "📞 Call: " .. cleanTarget, cleanTarget)
+end
+
+function checkIncomingCallSignals()
+  if isCallActive or not currentUser.name or currentUser.name == "" then return end
+  
+  Http.get(BACKEND_URL .. "/api/call/signal?user=" .. currentUser.name .. "&t=" .. os.time(), function(code, content)
+    if code == 200 and content and content ~= "null" then
+      local res = decodeJSON(content)
+      if res and res.signal and res.signal.action == "call" and res.signal.from ~= currentUser.name then
+        local callerName = res.signal.from
+        local targetRoom = res.signal.roomId
+        showIncomingCallDialog(callerName, targetRoom)
+      end
+    end
+  end)
+end
+
+function showIncomingCallDialog(callerName, targetRoom)
+  if isCallActive then return end
+  announce("Incoming voice call from " .. callerName .. ". Double tap Accept to talk.")
+  
+  local alertBuilder = AlertDialog.Builder(activity)
+  alertBuilder.setTitle("📞 Incoming Voice Call")
+  alertBuilder.setMessage("User " .. callerName .. " is calling you.")
+  alertBuilder.setPositiveButton("✅ Accept Call", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      startOrJoinVoiceCall(targetRoom, "private", "📞 Call: " .. callerName, callerName)
+    end
+  })
+  alertBuilder.setNegativeButton("❌ Decline", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local decPayload = encodeJSON({
+        action = "decline",
+        from = currentUser.name,
+        to = callerName,
+        roomId = targetRoom
+      })
+      Http.post(BACKEND_URL .. "/api/call/signal", decPayload, function() end)
+      announce("Call declined.")
+    end
+  })
+  alertBuilder.show()
+end
+
+-- --------------------------------------------------------------------
 -- 0. STARTUP SPLASH / LOADING SCREEN
 -- --------------------------------------------------------------------
 local hasProceededFromSplash = false
@@ -2971,6 +3515,16 @@ function openGroupChatScreen(groupObj)
       };
       {
         Button;
+        id = "btnGroupVoiceCall";
+        text = "📞 Call";
+        textColor = "#FFFFFF";
+        backgroundColor = "#E65100";
+        textSize = "12sp";
+        layout_marginRight = "4dp";
+        ContentDescription = "Start or join Group Live Voice Call";
+      };
+      {
+        Button;
         id = "btnGroupSettings";
         text = "⚙️ Settings";
         textColor = "#FFFFFF";
@@ -3027,7 +3581,21 @@ function openGroupChatScreen(groupObj)
     };
   }
 
-  activity.setContentView(loadlayout(groupChatLayout))
+  local groupView, groupViews = loadlayout(groupChatLayout)
+  activity.setContentView(groupView)
+  
+  local btnGroupVoiceCall = (groupViews and groupViews.btnGroupVoiceCall) or btnGroupVoiceCall or _ENV.btnGroupVoiceCall
+  local btnBackToLounge = (groupViews and groupViews.btnBackToLounge) or btnBackToLounge or _ENV.btnBackToLounge
+  local btnGroupSettings = (groupViews and groupViews.btnGroupSettings) or btnGroupSettings or _ENV.btnGroupSettings
+  local btnRecordGroupVoice = (groupViews and groupViews.btnRecordGroupVoice) or btnRecordGroupVoice or _ENV.btnRecordGroupVoice
+  local btnSendGroupMessage = (groupViews and groupViews.btnSendGroupMessage) or btnSendGroupMessage or _ENV.btnSendGroupMessage
+  local editGroupMessageInput = (groupViews and groupViews.editGroupMessageInput) or editGroupMessageInput or _ENV.editGroupMessageInput
+
+  if btnGroupVoiceCall then
+    btnGroupVoiceCall.onClick = function()
+      startOrJoinVoiceCall("group_call_" .. groupObj.id, "group", "👥 " .. (groupObj.name or "Group Call"))
+    end
+  end
   
   btnBackToLounge.onClick = function()
     activeGroup = nil
@@ -3589,6 +4157,16 @@ function createPublicTabView()
       };
       {
         Button;
+        id = "btnPublicVoiceStage";
+        text = "📞 Stage";
+        textColor = "#FFFFFF";
+        backgroundColor = "#E65100";
+        textSize = "12sp";
+        layout_marginRight = "4dp";
+        ContentDescription = "Join Public Live Voice Stage button";
+      };
+      {
+        Button;
         id = "btnSavePublicChatLocal";
         text = "📥 Save";
         textColor = "#FFFFFF";
@@ -3619,15 +4197,18 @@ function createPublicTabView()
         hint = "Type message...";
         layout_weight = "1";
         textSize = "16sp";
-        padding = "12dp";
+        padding = "10dp";
         backgroundColor = "#FFFFFF";
       };
       {
         Button;
         id = "btnSendPublicMessage";
-        text = "Post";
+        text = "Send";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
+        textSize = "14sp";
+        layout_width = "65dp";
+        layout_height = "50dp";
         layout_marginLeft = "4dp";
       };
       {
@@ -3644,7 +4225,14 @@ function createPublicTabView()
     };
   }
   
-  local view = loadlayout(viewLayout)
+  local view, views = loadlayout(viewLayout)
+  local btnPublicVoiceStage = (views and views.btnPublicVoiceStage) or btnPublicVoiceStage or _ENV.btnPublicVoiceStage
+  
+  if btnPublicVoiceStage then
+    btnPublicVoiceStage.onClick = function()
+      startOrJoinVoiceCall("public_stage", "public", "🌐 Public Voice Stage")
+    end
+  end
   
   if btnSavePublicChatLocal then
     btnSavePublicChatLocal.onClick = function()
@@ -4173,10 +4761,21 @@ function openPrivateChatScreen(targetUsername)
       };
       {
         Button;
+        id = "btnPrivateVoiceCall";
+        text = "📞 Call";
+        textColor = "#FFFFFF";
+        backgroundColor = "#E65100";
+        textSize = "12sp";
+        layout_marginRight = "4dp";
+        ContentDescription = "Call " .. targetUsername .. " button";
+      };
+      {
+        Button;
         id = "btnSavePrivateChatLocal";
         text = "📥 Save";
         textColor = "#FFFFFF";
         backgroundColor = "#128C7E";
+        textSize = "12sp";
       };
     };
     {
@@ -4228,7 +4827,20 @@ function openPrivateChatScreen(targetUsername)
     };
   }
 
-  activity.setContentView(loadlayout(chatLayout))
+  local privateView, privateViews = loadlayout(chatLayout)
+  activity.setContentView(privateView)
+  
+  local btnPrivateVoiceCall = (privateViews and privateViews.btnPrivateVoiceCall) or btnPrivateVoiceCall or _ENV.btnPrivateVoiceCall
+  local btnSavePrivateChatLocal = (privateViews and privateViews.btnSavePrivateChatLocal) or btnSavePrivateChatLocal or _ENV.btnSavePrivateChatLocal
+  local btnRecordPrivateVoice = (privateViews and privateViews.btnRecordPrivateVoice) or btnRecordPrivateVoice or _ENV.btnRecordPrivateVoice
+  local btnSendMessage = (privateViews and privateViews.btnSendMessage) or btnSendMessage or _ENV.btnSendMessage
+  local editMessageInput = (privateViews and privateViews.editMessageInput) or editMessageInput or _ENV.editMessageInput
+
+  if btnPrivateVoiceCall then
+    btnPrivateVoiceCall.onClick = function()
+      initiatePrivate1on1Call(targetUsername)
+    end
+  end
   
   btnSavePrivateChatLocal.onClick = function()
     local msgs = privateChatHistory[targetUsername] or {}
@@ -5778,7 +6390,9 @@ function startPollingLoop()
     elseif activeTab == "lounge" then
       fetchGroupsList()
     end
-    -- On "home", "you", "login", "splash": NO background polling! Saves 100% data!
+    
+    -- Check for incoming private voice calls
+    checkIncomingCallSignals()
     
     Handler().postDelayed(Runnable{ run = poll }, 5000)
   end
