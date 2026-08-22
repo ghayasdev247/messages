@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.1.0"
-local APP_VERSION_CODE = 44
+local APP_VERSION = "3.2.0"
+local APP_VERSION_CODE = 45
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -31,8 +31,8 @@ local XPK_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/
 -- Primary Live Firebase Realtime Database Endpoint
 local FIREBASE_URL = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app"
 
--- Active PC Wi-Fi Server IP
-local BACKEND_URL = "http://10.20.244.148:5000"
+-- Active 24/7 Global Cloudflare Serverless Backend
+local BACKEND_URL = "https://messages.vistudio247.workers.dev"
 
 local GITHUB_OWNER = "ghayasdev247"
 local GITHUB_REPO = "messages"

@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.1.0",
-                "version_code": 44,
+                "version": "3.2.0",
+                "version_code": 45,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.1.0: Bulletproof Native Android org.json Parser, Restored Public & Group Chat Real-Time Feed, Removed Erroneous Cloud Purging on Exit."
+                "changelog": "Version 3.2.0: Connected to 24/7 Global High-Speed Cloudflare Serverless Backend (https://messages.vistudio247.workers.dev)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
