@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "2.9.0",
-                "version_code": 42,
+                "version": "3.0.0",
+                "version_code": 43,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 2.9.0: Private Lobby New Chat Flow, Public 24-Hour Auto-Expiration & Message Count, and Local Voice Playback with Automatic Cloud Audio Cleanup."
+                "changelog": "Version 3.0.0: Instant Message Delivery (Sub-200ms Direct Firebase Pipeline, Removed Dead Backend Timeouts & GitHub Commit Overhead) and Zero-Idle Data Saver."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

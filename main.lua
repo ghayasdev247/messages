@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.9.0"
-local APP_VERSION_CODE = 42
+local APP_VERSION = "3.0.0"
+local APP_VERSION_CODE = 43
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -761,32 +761,15 @@ end
 
 function apiGet(endpoint, githubFilePath, callback)
   fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
-    if fbSuccess and fbData and type(fbData) == "table" and #fbData > 0 then
+    if fbSuccess and fbData then
       callback(true, fbData)
       return
     end
-    
-    Http.get(BACKEND_URL .. endpoint, function(code, content)
-      if code == 200 then
-        local res = decodeJSON(content)
-        if res and (res.success or res.messages or res.users or res.groups) then
-          local fetched = res.messages or res.users or res.groups or res
-          callback(true, fetched)
-          return
-        end
-      end
-      
-      fetchGitHubFile(githubFilePath, function(success, data)
-        callback(success, data)
-      end)
-    end)
+    callback(false, {})
   end)
 end
 
 function apiPost(endpoint, payload, callback)
-  local payloadStr = encodeJSON(payload)
-  local headers = { ["Content-Type"] = "application/json" }
-
   if string.find(endpoint, "/api/public%-feed") then
     local msgObj = {
       sender = payload.sender or currentUser.name,
@@ -796,12 +779,8 @@ function apiPost(endpoint, payload, callback)
       time = payload.time or os.date("%I:%M %p"),
       timestamp = os.time()
     }
-    postFirebaseData("data/public_feed", msgObj, function() end)
-    Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-    fetchGitHubFile("data/public_feed.json", function(ok, currentFeed)
-      local feedToSave = currentFeed or {}
-      table.insert(feedToSave, msgObj)
-      commitGitHubFile("data/public_feed.json", feedToSave, "Public message from " .. msgObj.sender, callback)
+    postFirebaseData("data/public_feed", msgObj, function(ok)
+      if callback then callback(ok) end
     end)
 
   elseif string.find(endpoint, "/api/private%-messages") then
@@ -815,12 +794,8 @@ function apiPost(endpoint, payload, callback)
       timestamp = os.time()
     }
     local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-    postFirebaseData(filePath, msgObj, function() end)
-    Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-    fetchGitHubFile(filePath, function(ok, currentThread)
-      local threadToSave = currentThread or {}
-      table.insert(threadToSave, msgObj)
-      commitGitHubFile(filePath, threadToSave, "Private message to " .. msgObj.recipient, callback)
+    postFirebaseData(filePath, msgObj, function(ok)
+      if callback then callback(ok) end
     end)
 
   elseif string.find(endpoint, "/api/group%-messages") then
@@ -834,12 +809,8 @@ function apiPost(endpoint, payload, callback)
       timestamp = os.time()
     }
     local filePath = getGroupChatFilePath(msgObj.groupId)
-    postFirebaseData(filePath, msgObj, function() end)
-    Http.post(BACKEND_URL .. endpoint, payloadStr, nil, nil, headers, function() end)
-    fetchGitHubFile(filePath, function(ok, currentThread)
-      local threadToSave = currentThread or {}
-      table.insert(threadToSave, msgObj)
-      commitGitHubFile(filePath, threadToSave, "Group message in " .. msgObj.groupId, callback)
+    postFirebaseData(filePath, msgObj, function(ok)
+      if callback then callback(ok) end
     end)
 
   elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
