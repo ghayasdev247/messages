@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "2.8.0"
-local APP_VERSION_CODE = 41
+local APP_VERSION = "2.9.0"
+local APP_VERSION_CODE = 42
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -952,6 +952,17 @@ function downloadAndPlayVoiceNote(msgItem)
   if not isFileReady then
     announce("Downloading voice note...")
     isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
+    
+    -- Clean up cloud copy for private chat messages once downloaded locally
+    if isFileReady and activeTab == "private_chat" and activeChatTarget ~= "" then
+      pcall(function()
+        local chatPath = getChatFilePath(currentUser.name, activeChatTarget)
+        if msgItem._fb_key then
+          local fbItemUrl = FIREBASE_URL .. "/" .. chatPath:gsub("%.json$", "") .. "/" .. msgItem._fb_key .. "/audio.json"
+          Http.delete(fbItemUrl, function() end)
+        end
+      end)
+    end
   end
   
   if not isFileReady then
@@ -3146,11 +3157,13 @@ function createPublicTabView()
       backgroundColor = "#075E54";
       {
         TextView;
-        text = "🌐 Global Public Lobby";
+        id = "txtPublicHeader";
+        text = "🌐 Public Lobby (" .. #publicFeedMessages .. " Msgs)";
         textSize = "18sp";
         textColor = "#FFFFFF";
         Typeface = Typeface.DEFAULT_BOLD;
         layout_weight = "1";
+        ContentDescription = "Global Public Lobby, " .. #publicFeedMessages .. " messages available";
       };
       {
         Button;
@@ -3250,15 +3263,28 @@ function fetchPublicFeedMessages()
   apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
     if success and data and type(data) == "table" then
       local sorted = deduplicateAndSortMessages(data)
-      local newCount = #sorted
+      local now_ts = os.time()
+      local filteredFeed = {}
+      
+      -- Auto-expire messages older than 24 hours (1 day / 86400 seconds)
+      for _, m in ipairs(sorted) do
+        if type(m) == "table" then
+          local msgTs = tonumber(m.timestamp or 0) or 0
+          if msgTs == 0 or (now_ts - msgTs <= 86400) then
+            table.insert(filteredFeed, m)
+          end
+        end
+      end
+      
+      local newCount = #filteredFeed
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
-        local latest = sorted[newCount]
+        local latest = filteredFeed[newCount]
         if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
           announce("New public message from " .. (latest.sender or "User") .. ": " .. cleanMessageText(latest.text, latest.isVoice))
         end
       end
       lastPublicMessageCount = newCount
-      publicFeedMessages = sorted
+      publicFeedMessages = filteredFeed
       
       if activeTab == "public" and lastRenderedPublicCount ~= newCount then
         lastRenderedPublicCount = newCount
@@ -3270,6 +3296,13 @@ end
 
 function updatePublicFeedUI()
   if not listPublicMessages then return end
+  
+  if txtPublicHeader then
+    txtPublicHeader.setText("🌐 Public Lobby (" .. #publicFeedMessages .. " Msgs)")
+    pcall(function()
+      txtPublicHeader.setContentDescription("Global Public Lobby, " .. #publicFeedMessages .. " messages available")
+    end)
+  end
   
   local chatItemLayout = {
     LinearLayout;
@@ -3349,6 +3382,93 @@ end
 -- --------------------------------------------------------------------
 -- TAB 4: PRIVATE LOBBY VIEW (ACCESSIBLE VERTICAL LISTVIEW)
 -- --------------------------------------------------------------------
+function savePrivateContact(username)
+  if not username or username == "" or string.lower(username) == string.lower(currentUser.name) then return end
+  local clean = username:gsub("^%s+", ""):gsub("%s+$", "")
+  local contacts = loadPrivateContacts()
+  contacts[clean] = os.time()
+  pcall(function()
+    local path = getAppAudioDir() .. "/private_contacts.json"
+    local f = io.open(path, "w")
+    if f then
+      f:write(encodeJSON(contacts))
+      f:close()
+    end
+  end)
+end
+
+function loadPrivateContacts()
+  local path = getAppAudioDir() .. "/private_contacts.json"
+  local res = {}
+  pcall(function()
+    local f = io.open(path, "r")
+    if f then
+      local data = f:read("*a")
+      f:close()
+      if data and data ~= "" then
+        local dec = decodeJSON(data)
+        if type(dec) == "table" then res = dec end
+      end
+    end
+  end)
+  return res
+end
+
+function showNewChatDialog()
+  announce("Loading online users for new chat...")
+  local now_ts = os.time()
+  local fbUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. now_ts
+  
+  Http.get(fbUrl, function(code, content)
+    local candidates = {}
+    local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+    
+    if code == 200 and content and content ~= "null" and content ~= "{}" then
+      local data = decodeJSON(content)
+      if data and type(data) == "table" then
+        for k, v in pairs(data) do
+          if type(v) == "table" then
+            local name = v.name or v.username
+            local lastSeen = tonumber(v.last_seen or 0) or 0
+            if name and type(name) == "string" and name ~= "" then
+              local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
+              local lowerName = string.lower(cleanName)
+              local isOnline = (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true)
+              if isOnline and lowerName ~= myClean then
+                table.insert(candidates, cleanName)
+              end
+            end
+          end
+        end
+      end
+    end
+    
+    table.sort(candidates)
+    
+    if #candidates == 0 then
+      announce("No other users are currently online. Try again later.")
+      return
+    end
+    
+    local displayItems = {}
+    for _, name in ipairs(candidates) do
+      table.insert(displayItems, "👤 " .. name .. " - Tap to Message")
+    end
+    
+    local builder = AlertDialog.Builder(activity)
+    builder.setTitle("➕ New Chat (" .. #candidates .. " Online)")
+    builder.setItems(displayItems, DialogInterface.OnClickListener{
+      onClick = function(d, w)
+        local chosenUser = candidates[w + 1]
+        savePrivateContact(chosenUser)
+        openPrivateChatScreen(chosenUser)
+      end
+    })
+    builder.setNegativeButton("Cancel", nil)
+    builder.show()
+  end)
+end
+
 function createPrivateTabView()
   lastRenderedUsersSignature = ""
   local viewLayout = {
@@ -3366,11 +3486,21 @@ function createPrivateTabView()
       layout_marginBottom = "10dp";
       {
         TextView;
-        text = "💬 Active Online Users";
+        text = "💬 Private Lobby";
         textSize = "18sp";
         textColor = "#075E54";
         Typeface = Typeface.DEFAULT_BOLD;
         layout_weight = "1";
+      };
+      {
+        Button;
+        id = "btnNewPrivateChat";
+        text = "➕ New Chat";
+        textSize = "13sp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        layout_marginRight = "6dp";
+        ContentDescription = "Start new private chat with online users button";
       };
       {
         Button;
@@ -3379,6 +3509,7 @@ function createPrivateTabView()
         textSize = "13sp";
         backgroundColor = "#075E54";
         textColor = "#FFFFFF";
+        ContentDescription = "Refresh private chats button";
       };
     };
     {
@@ -3392,9 +3523,15 @@ function createPrivateTabView()
   
   local view = loadlayout(viewLayout)
   
+  if btnNewPrivateChat then
+    btnNewPrivateChat.onClick = function()
+      showNewChatDialog()
+    end
+  end
+  
   if btnRefreshUsers then
     btnRefreshUsers.onClick = function()
-      announce("Refreshing active online users...")
+      announce("Refreshing private chats...")
       lastRenderedUsersSignature = ""
       fetchOnlineUsersList()
     end
@@ -3452,11 +3589,39 @@ end
 function updatePrivateDirectoryUI()
   if not listOnlineUsers then return end
   
-  local currentSig = ""
+  -- Merge active online users with saved contact history
+  local savedContacts = loadPrivateContacts()
+  local mergedMap = {}
+  
   for _, u in ipairs(onlineUsersList) do
-    currentSig = currentSig .. ";" .. (u.name or "")
+    if type(u) == "table" and u.name then
+      mergedMap[u.name] = { name = u.name, isOnline = true, status = "● Active Now" }
+    end
   end
-  if currentSig == lastRenderedUsersSignature and #onlineUsersList > 0 then
+  
+  for contactName, _ in pairs(savedContacts) do
+    if not mergedMap[contactName] then
+      mergedMap[contactName] = { name = contactName, isOnline = false, status = "○ Offline" }
+    end
+  end
+  
+  local displayList = {}
+  for _, entry in pairs(mergedMap) do
+    table.insert(displayList, entry)
+  end
+  
+  table.sort(displayList, function(a, b)
+    if a.isOnline ~= b.isOnline then
+      return a.isOnline -- Online users first
+    end
+    return a.name < b.name
+  end)
+  
+  local currentSig = ""
+  for _, u in ipairs(displayList) do
+    currentSig = currentSig .. ";" .. (u.name or "") .. ":" .. (u.status or "")
+  end
+  if currentSig == lastRenderedUsersSignature and #displayList > 0 then
     return
   end
   lastRenderedUsersSignature = currentSig
@@ -3498,20 +3663,19 @@ function updatePrivateDirectoryUI()
   }
   
   local data = {}
-  for _, u in ipairs(onlineUsersList) do
-    if type(u) == "table" then
-      table.insert(data, { 
-        itemName = u.name or "User", 
-        itemStatus = "● Active Now"
-      })
-    end
+  for _, u in ipairs(displayList) do
+    table.insert(data, { 
+      itemName = u.name, 
+      itemStatus = u.status
+    })
   end
   
   local adapter = LuaAdapter(activity, data, itemLayout)
   listOnlineUsers.setAdapter(adapter)
   
   listOnlineUsers.onItemClick = function(parent, view, position, id)
-    local selectedUser = onlineUsersList[position + 1].name
+    local selectedUser = displayList[position + 1].name
+    savePrivateContact(selectedUser)
     announce("Opening private chat with " .. selectedUser)
     openPrivateChatScreen(selectedUser)
   end
