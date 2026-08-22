@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.5.2"
-local APP_VERSION_CODE = 51
+local APP_VERSION = "3.5.3"
+local APP_VERSION_CODE = 52
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1196,6 +1196,18 @@ function showVoicePlayerDialog(msgItem)
     };
     {
       Button;
+      id = "btnPlayerOpenExternal";
+      text = "🎵 Open in External Player (VLC / Another App)";
+      layout_width = "fill";
+      layout_height = "46dp";
+      backgroundColor = "#455A64";
+      textColor = "#FFFFFF";
+      textSize = "13sp";
+      layout_marginBottom = "8dp";
+      ContentDescription = "Open voice note in another app or external audio player button";
+    };
+    {
+      Button;
       id = "btnPlayerStopClose";
       text = "⏹️ Stop & Close";
       layout_width = "fill";
@@ -1381,6 +1393,12 @@ function showVoicePlayerDialog(msgItem)
         txtPlayerTimeTrack.setText(formatTimeSeconds(newSec) .. " / " .. formatTimeSeconds(totalSec))
       end
       announce("Forwarded 10 seconds. Current time: " .. formatTimeSeconds(newSec))
+    end
+  end
+
+  if btnPlayerOpenExternal then
+    btnPlayerOpenExternal.onClick = function()
+      openVoiceNoteInExternalApp(msgItem)
     end
   end
 
@@ -1627,7 +1645,17 @@ function openVoiceNoteInExternalApp(msgItem)
   import "android.content.Intent"
   import "android.net.Uri"
   import "java.io.File"
+  import "java.io.FileInputStream"
+  import "java.io.FileOutputStream"
+  import "android.os.Environment"
   
+  -- Disable FileUriExposedException in Android VM
+  pcall(function()
+    import "android.os.StrictMode"
+    local builder = StrictMode.VmPolicy.Builder()
+    StrictMode.setVmPolicy(builder.build())
+  end)
+
   if not msgItem then return end
   local audioData = msgItem.audio or msgItem.voicePath
   if not audioData or audioData == "" then
@@ -1676,18 +1704,62 @@ function openVoiceNoteInExternalApp(msgItem)
     return
   end
   
+  -- Also copy to public Music directory for 100% external player compatibility
+  local publicExportFile = targetAudioFile
   pcall(function()
-    local audioFile = File(targetAudioFile)
+    local extMusicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).getAbsolutePath() .. "/AccessibleMessenger"
+    local dirObj = File(extMusicDir)
+    if not dirObj.exists() then dirObj.mkdirs() end
+    local pubFile = extMusicDir .. "/voice_" .. msgHash .. ".m4a"
+    local srcObj = File(targetAudioFile)
+    if srcObj.exists() then
+      local inStream = FileInputStream(srcObj)
+      local outStream = FileOutputStream(File(pubFile))
+      local buf = byte[4096]
+      local len = inStream.read(buf)
+      while len > 0 do
+        outStream.write(buf, 0, len)
+        len = inStream.read(buf)
+      end
+      inStream.close()
+      outStream.close()
+      publicExportFile = pubFile
+    end
+  end)
+  
+  local success = false
+  
+  -- Attempt 1: Direct Intent with ACTION_VIEW and Chooser
+  pcall(function()
     local intent = Intent(Intent.ACTION_VIEW)
-    local uri = Uri.fromFile(audioFile)
-    
-    intent.setDataAndType(uri, "audio/*")
+    local fileUri = Uri.fromFile(File(publicExportFile))
+    intent.setDataAndType(fileUri, "audio/*")
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     
-    activity.startActivity(Intent.createChooser(intent, "Open Voice Note With..."))
-    announce("Opening voice note in external player...")
+    local chooser = Intent.createChooser(intent, "Open Audio With...")
+    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    activity.startActivity(chooser)
+    success = true
+    announce("Opening external audio player chooser...")
   end)
+  
+  -- Attempt 2: Fallback to direct Intent without chooser
+  if not success then
+    pcall(function()
+      local intent = Intent(Intent.ACTION_VIEW)
+      local fileUri = Uri.fromFile(File(targetAudioFile))
+      intent.setDataAndType(fileUri, "audio/*")
+      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      activity.startActivity(intent)
+      success = true
+      announce("Launching audio player...")
+    end)
+  end
+  
+  if not success then
+    announce("Could not launch external player. File saved to Music folder.")
+  end
 end
 
 function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGroup)

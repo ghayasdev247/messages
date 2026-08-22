@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.5.2",
-                "version_code": 51,
+                "version": "3.5.3",
+                "version_code": 52,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.5.2: Fixed Admin Panel user list display and added 'Open in Another App' option on voice message long-press."
+                "changelog": "Version 3.5.3: Added direct 'Open in External Player' button in Voice Player dialog, fixed StrictMode VM policy to reliably launch Android app chooser, and copied audio to public storage for 100% external player compatibility."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
