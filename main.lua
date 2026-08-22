@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.2.0"
-local APP_VERSION_CODE = 45
+local APP_VERSION = "3.3.0"
+local APP_VERSION_CODE = 46
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -883,7 +883,12 @@ function apiPost(endpoint, payload, callback)
       local userKey = string.lower(cleanUser):gsub("[^%w]", "_")
       local now_ts = os.time()
       local userObj = { name = cleanUser, last_seen = now_ts, status = "Online" }
+      local allUserObj = { name = cleanUser, registered_at = now_ts, last_seen = now_ts }
+      
       local fbUrl = FIREBASE_URL .. "/data/online_users/" .. userKey .. ".json"
+      local fbAllUrl = FIREBASE_URL .. "/data/all_users/" .. userKey .. ".json"
+      
+      Http.put(fbAllUrl, encodeJSON(allUserObj), function() end)
       Http.put(fbUrl, encodeJSON(userObj), function(fbCode)
         if callback then callback(true) end
       end)
@@ -3297,28 +3302,15 @@ function fetchPublicFeedMessages()
   apiGet("/api/public-feed", "data/public_feed.json", function(success, data)
     if success and data and type(data) == "table" then
       local sorted = deduplicateAndSortMessages(data)
-      local now_ts = os.time()
-      local filteredFeed = {}
-      
-      -- Auto-expire messages older than 24 hours (1 day / 86400 seconds)
-      for _, m in ipairs(sorted) do
-        if type(m) == "table" then
-          local msgTs = tonumber(m.timestamp or 0) or 0
-          if msgTs == 0 or (now_ts - msgTs <= 86400) then
-            table.insert(filteredFeed, m)
-          end
-        end
-      end
-      
-      local newCount = #filteredFeed
+      local newCount = #sorted
       if newCount > lastPublicMessageCount and lastPublicMessageCount > 0 then
-        local latest = filteredFeed[newCount]
+        local latest = sorted[newCount]
         if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
           announce("New public message from " .. (latest.sender or "User") .. ": " .. cleanMessageText(latest.text, latest.isVoice))
         end
       end
       lastPublicMessageCount = newCount
-      publicFeedMessages = filteredFeed
+      publicFeedMessages = sorted
       
       if activeTab == "public" and lastRenderedPublicCount ~= newCount then
         lastRenderedPublicCount = newCount
@@ -3449,57 +3441,101 @@ function loadPrivateContacts()
 end
 
 function showNewChatDialog()
-  announce("Loading online users for new chat...")
+  announce("Loading registered users directory for new chat...")
   local now_ts = os.time()
-  local fbUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. now_ts
+  local allUsersUrl = FIREBASE_URL .. "/data/all_users.json?t=" .. now_ts
+  local onlineUsersUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. now_ts
   
-  Http.get(fbUrl, function(code, content)
-    local candidates = {}
-    local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
-    
-    if code == 200 and content and content ~= "null" and content ~= "{}" then
-      local data = decodeJSON(content)
-      if data and type(data) == "table" then
-        for k, v in pairs(data) do
+  Http.get(onlineUsersUrl, function(onCode, onContent)
+    local onlineMap = {}
+    if onCode == 200 and onContent and onContent ~= "null" then
+      local onData = decodeJSON(onContent)
+      if type(onData) == "table" then
+        for k, v in pairs(onData) do
           if type(v) == "table" then
-            local name = v.name or v.username
+            local uName = v.name or v.username
             local lastSeen = tonumber(v.last_seen or 0) or 0
-            if name and type(name) == "string" and name ~= "" then
-              local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
-              local lowerName = string.lower(cleanName)
-              local isOnline = (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true)
-              if isOnline and lowerName ~= myClean then
-                table.insert(candidates, cleanName)
-              end
+            if uName and (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true) then
+              onlineMap[string.lower(tostring(uName):gsub("^%s+", ""):gsub("%s+$", ""))] = true
             end
           end
         end
       end
     end
     
-    table.sort(candidates)
-    
-    if #candidates == 0 then
-      announce("No other users are currently online. Try again later.")
-      return
-    end
-    
-    local displayItems = {}
-    for _, name in ipairs(candidates) do
-      table.insert(displayItems, "👤 " .. name .. " - Tap to Message")
-    end
-    
-    local builder = AlertDialog.Builder(activity)
-    builder.setTitle("➕ New Chat (" .. #candidates .. " Online)")
-    builder.setItems(displayItems, DialogInterface.OnClickListener{
-      onClick = function(d, w)
-        local chosenUser = candidates[w + 1]
-        savePrivateContact(chosenUser)
-        openPrivateChatScreen(chosenUser)
+    Http.get(allUsersUrl, function(code, content)
+      local candidates = {}
+      local seenMap = {}
+      local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+      
+      local function addCandidate(rawName)
+        if not rawName or rawName == "" then return end
+        local cleanName = rawName:gsub("^%s+", ""):gsub("%s+$", "")
+        local lowKey = string.lower(cleanName)
+        if lowKey ~= myClean and not seenMap[lowKey] then
+          seenMap[lowKey] = true
+          local isOnline = (onlineMap[lowKey] == true)
+          table.insert(candidates, {
+            name = cleanName,
+            isOnline = isOnline,
+            status = isOnline and "● Online" or "○ Offline"
+          })
+        end
       end
-    })
-    builder.setNegativeButton("Cancel", nil)
-    builder.show()
+      
+      if code == 200 and content and content ~= "null" and content ~= "{}" then
+        local data = decodeJSON(content)
+        if type(data) == "table" then
+          for k, v in pairs(data) do
+            if type(v) == "table" then
+              addCandidate(v.name or v.username or k)
+            elseif type(v) == "string" then
+              addCandidate(v)
+            end
+          end
+        end
+      end
+      
+      for onLowKey, _ in pairs(onlineMap) do
+        if onLowKey ~= myClean and not seenMap[onLowKey] then
+          addCandidate(onLowKey)
+        end
+      end
+      
+      local saved = loadPrivateContacts()
+      for savedName, _ in pairs(saved) do
+        addCandidate(savedName)
+      end
+      
+      table.sort(candidates, function(a, b)
+        if a.isOnline ~= b.isOnline then
+          return a.isOnline -- Online users first
+        end
+        return a.name < b.name
+      end)
+      
+      if #candidates == 0 then
+        announce("No other users found in the registered directory.")
+        return
+      end
+      
+      local displayItems = {}
+      for _, u in ipairs(candidates) do
+        table.insert(displayItems, "👤 " .. u.name .. " (" .. u.status .. ") - Tap to Message")
+      end
+      
+      local builder = AlertDialog.Builder(activity)
+      builder.setTitle("➕ New Chat (" .. #candidates .. " Registered Users)")
+      builder.setItems(displayItems, DialogInterface.OnClickListener{
+        onClick = function(d, w)
+          local chosenUser = candidates[w + 1].name
+          savePrivateContact(chosenUser)
+          openPrivateChatScreen(chosenUser)
+        end
+      })
+      builder.setNegativeButton("Cancel", nil)
+      builder.show()
+    end)
   end)
 end
 

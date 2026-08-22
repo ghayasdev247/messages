@@ -123,21 +123,42 @@ export default {
         return new Response(JSON.stringify({ success: true, users: onlineList }), { headers: CORS_HEADERS, status: 200 });
       }
 
+      if (path === "/api/all-users") {
+        const fbRes = await fetch(`${FIREBASE_DB}/data/all_users.json`);
+        const data = fbRes.ok ? await fbRes.json() : {};
+        let allList = [];
+        if (data && typeof data === "object") {
+          allList = Array.isArray(data) ? data : Object.values(data);
+        }
+        return new Response(JSON.stringify({ success: true, users: allList }), { headers: CORS_HEADERS, status: 200 });
+      }
+
       if (path === "/api/heartbeat" || path === "/api/login") {
         if (method === "POST") {
           const body = await request.json();
           const username = (body.username || body.name || "").trim();
           if (username) {
             const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+            const nowTs = Math.floor(Date.now() / 1000);
             const userObj = {
               name: username,
-              last_seen: Math.floor(Date.now() / 1000),
+              last_seen: nowTs,
               status: "Online"
+            };
+            const allUserObj = {
+              name: username,
+              registered_at: nowTs,
+              last_seen: nowTs
             };
             await fetch(`${FIREBASE_DB}/data/online_users/${userKey}.json`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(userObj)
+            });
+            await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(allUserObj)
             });
             return new Response(JSON.stringify({ success: true, user: userObj }), { headers: CORS_HEADERS, status: 200 });
           }
