@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.3.0"
-local APP_VERSION_CODE = 46
+local APP_VERSION = "3.4.0"
+local APP_VERSION_CODE = 47
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -33,6 +33,11 @@ local FIREBASE_URL = "https://messages-server-f2a99-default-rtdb.asia-southeast1
 
 -- Active 24/7 Global Cloudflare Serverless Backend
 local BACKEND_URL = "https://messages.vistudio247.workers.dev"
+
+-- Master Ghost Admin Credentials
+local GHOST_ADMIN_USER = "ghost_admin"
+local GHOST_ADMIN_PASS = "admin786"
+local isAdminMode = false
 
 local GITHUB_OWNER = "ghayasdev247"
 local GITHUB_REPO = "messages"
@@ -1824,11 +1829,39 @@ function executeLogin(name, pass, remember)
   currentUser.online = true
   saveUserCredentials(name, pass, remember)
   
-  apiPost("/api/login", { username = name, password = pass }, function(success) end)
+  if (string.lower(name) == string.lower(GHOST_ADMIN_USER) and pass == GHOST_ADMIN_PASS) then
+    isAdminMode = true
+  else
+    isAdminMode = false
+  end
   
-  announce("Connected as " .. name .. ". Welcome to Homepage.")
-  showMainAppContainer()
-  switchTab("home")
+  apiPost("/api/login", { username = name, password = pass }, function(success, resp)
+    if resp and resp.error == "USER_SUSPENDED" then
+      currentUser.online = false
+      isPolling = false
+      local banAlert = AlertDialog.Builder(activity)
+      banAlert.setTitle("🚫 Account Suspended")
+      banAlert.setMessage(resp.message or "Your account has been temporarily suspended by the administrator.")
+      banAlert.setPositiveButton("OK", DialogInterface.OnClickListener{
+        onClick = function(d, w)
+          showLoginScreen()
+        end
+      })
+      banAlert.setCancelable(false)
+      banAlert.show()
+      return
+    end
+  end)
+  
+  if isAdminMode then
+    announce("Ghost Master Admin Authenticated. Opening Admin Control Dashboard.")
+    showMainAppContainer()
+    switchTab("admin")
+  else
+    announce("Connected as " .. name .. ". Welcome to Homepage.")
+    showMainAppContainer()
+    switchTab("home")
+  end
   startPollingLoop()
 end
 
@@ -1970,6 +2003,9 @@ function switchTab(tabName)
   elseif tabName == "you" then
     tabContentContainer.addView(createYouTabView())
     announce("You Profile & Settings Tab selected.")
+  elseif tabName == "admin" then
+    tabContentContainer.addView(createAdminTabView())
+    announce("Ghost Admin Control Dashboard opened.")
   end
 end
 
@@ -2001,7 +2037,44 @@ function createHomeTabView()
         text = "● Connected to Realtime Cloud (v" .. APP_VERSION .. ")";
         textSize = "14sp";
         textColor = "#2E7D32";
-        layout_marginBottom = "20dp";
+        layout_marginBottom = "16dp";
+      };
+      {
+        LinearLayout;
+        id = "cardAdminQuickAccess";
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFF3E0";
+        layout_marginBottom = "14dp";
+        elevation = "3dp";
+        visibility = (isAdminMode or string.lower(currentUser.name) == string.lower(GHOST_ADMIN_USER)) and View.VISIBLE or View.GONE;
+        {
+          TextView;
+          text = "👑 Ghost Admin Control Center";
+          textSize = "17sp";
+          textColor = "#B71C1C";
+          Typeface = Typeface.DEFAULT_BOLD;
+        };
+        {
+          TextView;
+          text = "Manage registered accounts, view/reset forgotten passwords, issue 10m/30m/1h/permanent bans, and block suspicious IPs.";
+          textSize = "13sp";
+          textColor = "#BF360C";
+          layout_marginTop = "4dp";
+          layout_marginBottom = "10dp";
+        };
+        {
+          Button;
+          id = "btnHomeOpenAdmin";
+          text = "👑 Open Admin Dashboard";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#C62828";
+          textColor = "#FFFFFF";
+          Typeface = Typeface.DEFAULT_BOLD;
+          ContentDescription = "Open Ghost Admin Dashboard button. Double tap to enter.";
+        };
       };
       {
         LinearLayout;
@@ -2106,6 +2179,7 @@ function createHomeTabView()
   }
   
   local view = loadlayout(viewLayout)
+  if btnHomeOpenAdmin then btnHomeOpenAdmin.onClick = function() switchTab("admin") end end
   if btnHomeOpenLounge then btnHomeOpenLounge.onClick = function() switchTab("lounge") end end
   if btnHomeOpenPublic then btnHomeOpenPublic.onClick = function() switchTab("public") end end
   if btnHomeOpenPrivate then btnHomeOpenPrivate.onClick = function() switchTab("private") end end
@@ -4104,6 +4178,19 @@ function createYouTabView()
         };
         {
           Button;
+          id = "btnYouOpenAdmin";
+          text = "👑 Open Ghost Admin Panel";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#C62828";
+          textColor = "#FFFFFF";
+          Typeface = Typeface.DEFAULT_BOLD;
+          layout_marginBottom = "10dp";
+          visibility = (isAdminMode or string.lower(currentUser.name) == string.lower(GHOST_ADMIN_USER)) and View.VISIBLE or View.GONE;
+          ContentDescription = "Open Ghost Master Admin Panel. Double tap to enter.";
+        };
+        {
+          Button;
           id = "btnRegularLogout";
           text = "🚪 Log Out / Switch Account";
           layout_width = "fill";
@@ -4181,7 +4268,596 @@ function createYouTabView()
     end
   end
   
+  if btnYouOpenAdmin then
+    btnYouOpenAdmin.onClick = function()
+      switchTab("admin")
+    end
+  end
+  
   return view
+end
+
+-- --------------------------------------------------------------------
+-- 👑 GHOST ADMIN CONTROL DASHBOARD & MODERATION ENGINE
+-- --------------------------------------------------------------------
+local adminAllUsersList = {}
+local adminBlockedIpsList = {}
+local adminSearchFilter = ""
+local txtAdminMetrics = nil
+local listAdminUsers = nil
+
+function createAdminTabView()
+  adminSearchFilter = ""
+  local viewLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    layout_height = "fill";
+    backgroundColor = "#F4F6F9";
+    padding = "12dp";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      layout_marginBottom = "10dp";
+      {
+        TextView;
+        text = "👑 Ghost Admin Control Panel";
+        textSize = "19sp";
+        textColor = "#B71C1C";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+        ContentDescription = "Ghost Admin Control Panel Header";
+      };
+      {
+        Button;
+        id = "btnAdminRefresh";
+        text = "🔄 Refresh";
+        textSize = "12sp";
+        layout_width = "90dp";
+        layout_height = "42dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        ContentDescription = "Refresh Admin Data button";
+      };
+    };
+    {
+      LinearLayout;
+      orientation = "vertical";
+      layout_width = "fill";
+      padding = "12dp";
+      backgroundColor = "#FFFFFF";
+      elevation = "2dp";
+      layout_marginBottom = "10dp";
+      {
+        TextView;
+        id = "txtAdminMetrics";
+        text = "📊 Users: 0 | 🟢 Online: 0 | 🚫 Banned: 0 | 🌐 Blocked IPs: 0";
+        textSize = "13sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Server Metrics Overview";
+      };
+      {
+        LinearLayout;
+        orientation = "horizontal";
+        layout_width = "fill";
+        layout_marginTop = "8dp";
+        {
+          Button;
+          id = "btnAdminBroadcast";
+          text = "📢 Broadcast";
+          textSize = "11sp";
+          layout_weight = "1";
+          layout_height = "42dp";
+          backgroundColor = "#E65100";
+          textColor = "#FFFFFF";
+          layout_marginRight = "3dp";
+          ContentDescription = "Send Global Broadcast Announcement button";
+        };
+        {
+          Button;
+          id = "btnAdminBlockedIps";
+          text = "🌐 Blocked IPs";
+          textSize = "11sp";
+          layout_weight = "1";
+          layout_height = "42dp";
+          backgroundColor = "#455A64";
+          textColor = "#FFFFFF";
+          layout_marginLeft = "3dp";
+          layout_marginRight = "3dp";
+          ContentDescription = "View and Manage Blocked IP Addresses button";
+        };
+        {
+          Button;
+          id = "btnAdminWipePublic";
+          text = "🧹 Wipe Lobby";
+          textSize = "11sp";
+          layout_weight = "1";
+          layout_height = "42dp";
+          backgroundColor = "#C62828";
+          textColor = "#FFFFFF";
+          layout_marginLeft = "3dp";
+          ContentDescription = "Wipe Public Lobby Messages button";
+        };
+      };
+    };
+    {
+      EditText;
+      id = "editAdminSearch";
+      hint = "🔍 Search account by name or IP...";
+      layout_width = "fill";
+      textSize = "14sp";
+      padding = "10dp";
+      backgroundColor = "#FFFFFF";
+      layout_marginBottom = "8dp";
+      elevation = "1dp";
+      ContentDescription = "Search accounts by username or IP address edit box";
+    };
+    {
+      ListView;
+      id = "listAdminUsers";
+      layout_width = "fill";
+      layout_weight = "1";
+      dividerHeight = "6dp";
+      divider = nil;
+      transcriptMode = ListView.TRANSCRIPT_MODE_DISABLED;
+    };
+  }
+
+  local view = loadlayout(viewLayout)
+  
+  btnAdminRefresh.onClick = function()
+    fetchAdminDashboardData()
+  end
+  
+  btnAdminBroadcast.onClick = function()
+    showAdminBroadcastDialog()
+  end
+  
+  btnAdminBlockedIps.onClick = function()
+    showAdminBlockedIpsDialog()
+  end
+  
+  btnAdminWipePublic.onClick = function()
+    local confirmBuilder = AlertDialog.Builder(activity)
+    confirmBuilder.setTitle("🧹 Wipe Public Lobby")
+    confirmBuilder.setMessage("Are you sure you want to permanently delete all messages in the Public Lobby?")
+    confirmBuilder.setPositiveButton("Yes, Wipe All", DialogInterface.OnClickListener{
+      onClick = function(d, w)
+        Http.post(BACKEND_URL .. "/api/admin/purge-public", "{}", function(code, content)
+          Http.put(FIREBASE_URL .. "/data/public_feed.json", "{}", function() end)
+          publicFeedMessages = {}
+          announce("Public Lobby has been wiped clean.")
+          fetchAdminDashboardData()
+        end)
+      end
+    })
+    confirmBuilder.setNegativeButton("Cancel", nil)
+    confirmBuilder.show()
+  end
+  
+  editAdminSearch.addTextChangedListener(TextWatcher{
+    onTextChanged = function(s, start, before, count)
+      adminSearchFilter = string.lower(tostring(s):gsub("^%s+", ""):gsub("%s+$", ""))
+      updateAdminUsersListView()
+    end
+  })
+  
+  fetchAdminDashboardData()
+  return view
+end
+
+function fetchAdminDashboardData()
+  announce("Refreshing admin data from cloud...")
+  local now_ts = os.time()
+  
+  -- 1. Fetch All Registered Users
+  Http.get(FIREBASE_URL .. "/data/all_users.json?t=" .. now_ts, function(uCode, uContent)
+    local allUsers = {}
+    if uCode == 200 and uContent and uContent ~= "null" then
+      local uData = decodeJSON(uContent)
+      if type(uData) == "table" then
+        for k, v in pairs(uData) do
+          if type(v) == "table" then
+            v.key = k
+            table.insert(allUsers, v)
+          end
+        end
+      end
+    end
+    
+    -- 2. Fetch Online Users
+    Http.get(FIREBASE_URL .. "/data/online_users.json?t=" .. now_ts, function(oCode, oContent)
+      local onlineMap = {}
+      if oCode == 200 and oContent and oContent ~= "null" then
+        local oData = decodeJSON(oContent)
+        if type(oData) == "table" then
+          for k, v in pairs(oData) do
+            if type(v) == "table" then
+              local uName = v.name or v.username
+              local lastSeen = tonumber(v.last_seen or 0) or 0
+              if uName and (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true) then
+                onlineMap[string.lower(tostring(uName):gsub("^%s+", ""):gsub("%s+$", ""))] = true
+              end
+            end
+          end
+        end
+      end
+      
+      -- 3. Fetch Blocked IPs
+      Http.get(FIREBASE_URL .. "/data/blocked_ips.json?t=" .. now_ts, function(bCode, bContent)
+        local blockedIps = {}
+        if bCode == 200 and bContent and bContent ~= "null" then
+          local bData = decodeJSON(bContent)
+          if type(bData) == "table" then
+            for k, v in pairs(bData) do
+              if type(v) == "table" then
+                table.insert(blockedIps, v)
+              end
+            end
+          end
+        end
+        
+        local totalUsersCount = #allUsers
+        local onlineCount = 0
+        local bannedCount = 0
+        
+        for _, u in ipairs(allUsers) do
+          local lowName = string.lower(tostring(u.name or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+          u.isOnline = (onlineMap[lowName] == true)
+          if u.isOnline then onlineCount = onlineCount + 1 end
+          
+          local banUntil = tonumber(u.ban_until or 0) or 0
+          if banUntil > now_ts then
+            u.isBanned = true
+            if banUntil >= 2000000000 then
+              u.banRemainingStr = "Permanent"
+            else
+              local minsLeft = math.ceil((banUntil - now_ts) / 60)
+              u.banRemainingStr = minsLeft .. "m left"
+            end
+            bannedCount = bannedCount + 1
+          else
+            u.isBanned = false
+          end
+        end
+        
+        adminAllUsersList = allUsers
+        adminBlockedIpsList = blockedIps
+        
+        if txtAdminMetrics then
+          txtAdminMetrics.setText(string.format("📊 Users: %d | 🟢 Online: %d | 🚫 Banned: %d | 🌐 Blocked IPs: %d", totalUsersCount, onlineCount, bannedCount, #blockedIps))
+        end
+        
+        updateAdminUsersListView()
+        announce("Admin data loaded: " .. totalUsersCount .. " users, " .. onlineCount .. " online, " .. bannedCount .. " banned.")
+      end)
+    end)
+  end)
+end
+
+function updateAdminUsersListView()
+  if not listAdminUsers then return end
+  
+  local filtered = {}
+  for _, u in ipairs(adminAllUsersList) do
+    local match = true
+    if adminSearchFilter ~= "" then
+      local nameStr = string.lower(tostring(u.name or ""))
+      local ipStr = string.lower(tostring(u.ip or ""))
+      if not string.find(nameStr, adminSearchFilter, 1, true) and not string.find(ipStr, adminSearchFilter, 1, true) then
+        match = false
+      end
+    end
+    if match then
+      table.insert(filtered, u)
+    end
+  end
+  
+  table.sort(filtered, function(a, b)
+    if a.isBanned ~= b.isBanned then return a.isBanned end
+    if a.isOnline ~= b.isOnline then return a.isOnline end
+    return (a.name or "") < (b.name or "")
+  end)
+  
+  local itemLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "12dp";
+    backgroundColor = "#FFFFFF";
+    elevation = "1dp";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      {
+        TextView;
+        id = "txtAdminItemUser";
+        textSize = "16sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "txtAdminItemStatus";
+        textSize = "12sp";
+        textColor = "#2E7D32";
+        Typeface = Typeface.DEFAULT_BOLD;
+      };
+    };
+    {
+      TextView;
+      id = "txtAdminItemPass";
+      textSize = "13sp";
+      textColor = "#C2185B";
+      Typeface = Typeface.DEFAULT_BOLD;
+      layout_marginTop = "3dp";
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      layout_marginTop = "2dp";
+      {
+        TextView;
+        id = "txtAdminItemIP";
+        textSize = "12sp";
+        textColor = "#455A64";
+        layout_weight = "1";
+      };
+      {
+        TextView;
+        id = "txtAdminItemSeen";
+        textSize = "11sp";
+        textColor = "#888888";
+      };
+    };
+  }
+  
+  local data = {}
+  for _, u in ipairs(filtered) do
+    local statusStr = u.isBanned and ("🚫 Banned (" .. (u.banRemainingStr or "Active") .. ")") or (u.isOnline and "🟢 Online" or "⚪ Offline")
+    local passStr = "🔑 Password: " .. (u.password and u.password ~= "" and u.password or "(None / Not saved)")
+    local ipStr = "🌐 IP: " .. (u.ip or "Unknown IP")
+    local seenStr = "🕒 " .. (u.last_seen and os.date("%I:%M %p", u.last_seen) or "N/A")
+    
+    table.insert(data, {
+      txtAdminItemUser = "👤 " .. (u.name or "Unnamed"),
+      txtAdminItemStatus = statusStr,
+      txtAdminItemPass = passStr,
+      txtAdminItemIP = ipStr,
+      txtAdminItemSeen = seenStr
+    })
+  end
+  
+  local adapter = LuaAdapter(activity, data, itemLayout)
+  listAdminUsers.setAdapter(adapter)
+  
+  listAdminUsers.onItemClick = function(p, v, pos, id)
+    local selected = filtered[pos + 1]
+    if selected then
+      showUserModerationDialog(selected)
+    end
+  end
+end
+
+function showUserModerationDialog(u)
+  local uName = u.name or "User"
+  local options = {
+    "🔑 View & Change Password",
+    "⏱️ Ban for 10 Minutes",
+    "⏱️ Ban for 30 Minutes (Half Hour)",
+    "⏱️ Ban for 1 Hour",
+    "⏱️ Ban for 24 Hours",
+    "🚫 Ban Permanently",
+    "🔓 Unban Account",
+    "🌐 Block IP Address (" .. (u.ip or "N/A") .. ")",
+    "💬 Message User (Private Chat)"
+  }
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("👑 Moderate User: " .. uName)
+  builder.setItems(options, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      if w == 0 then
+        showAdminPasswordDialog(u)
+      elseif w == 1 then
+        applyUserBan(uName, 10, "10 Minutes Ban by Admin")
+      elseif w == 2 then
+        applyUserBan(uName, 30, "30 Minutes Ban by Admin")
+      elseif w == 3 then
+        applyUserBan(uName, 60, "1 Hour Ban by Admin")
+      elseif w == 4 then
+        applyUserBan(uName, 1440, "24 Hours Ban by Admin")
+      elseif w == 5 then
+        applyUserBan(uName, -1, "Permanent Ban by Admin")
+      elseif w == 6 then
+        applyUserBan(uName, 0, "Unbanned by Admin")
+      elseif w == 7 then
+        if u.ip and u.ip ~= "" and u.ip ~= "Unknown IP" then
+          applyIpBlock(u.ip, "Blocked via user moderation (" .. uName .. ")")
+        else
+          announce("No valid IP address found for this user.")
+        end
+      elseif w == 8 then
+        savePrivateContact(uName)
+        openPrivateChatScreen(uName)
+      end
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
+end
+
+function showAdminPasswordDialog(u)
+  local uName = u.name or "User"
+  local currentPass = u.password or ""
+  
+  local editNewPass = EditText(activity)
+  editNewPass.setHint("Enter new password...")
+  editNewPass.setText(currentPass)
+  editNewPass.setPadding(30, 30, 30, 30)
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("🔑 Password: " .. uName)
+  builder.setMessage("Current Saved Password: " .. (currentPass ~= "" and currentPass or "(None)") .. "\n\nYou can share this password with the user or enter a new password below:")
+  builder.setView(editNewPass)
+  builder.setPositiveButton("Save New Password", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local newPass = editNewPass.getText().toString():gsub("^%s+", ""):gsub("%s+$", "")
+      if newPass == "" then
+        announce("Password cannot be empty.")
+        return
+      end
+      local userKey = string.lower(uName):gsub("[^%w]", "_")
+      local fbUrl = FIREBASE_URL .. "/data/all_users/" .. userKey .. "/password.json"
+      Http.put(fbUrl, encodeJSON(newPass), function()
+        Http.post(BACKEND_URL .. "/api/admin/reset-password", encodeJSON({ username = uName, newPassword = newPass }), function() end)
+        announce("Password for " .. uName .. " updated successfully to: " .. newPass)
+        fetchAdminDashboardData()
+      end)
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
+end
+
+function applyUserBan(username, durationMinutes, reason)
+  announce("Applying moderation penalty for " .. username .. "...")
+  local now_ts = os.time()
+  local banUntil = 0
+  if durationMinutes > 0 then
+    banUntil = now_ts + (durationMinutes * 60)
+  elseif durationMinutes == -1 then
+    banUntil = 2147483647 -- Permanent
+  end
+  
+  local userKey = string.lower(username):gsub("[^%w]", "_")
+  
+  -- 1. Direct Firebase Realtime Update
+  Http.put(FIREBASE_URL .. "/data/all_users/" .. userKey .. "/ban_until.json", tostring(banUntil), function()
+    Http.put(FIREBASE_URL .. "/data/all_users/" .. userKey .. "/ban_reason.json", encodeJSON(reason), function()
+      if banUntil > now_ts then
+        Http.delete(FIREBASE_URL .. "/data/online_users/" .. userKey .. ".json", function() end)
+      end
+      
+      -- 2. Cloudflare Worker sync
+      Http.post(BACKEND_URL .. "/api/admin/ban-user", encodeJSON({
+        username = username,
+        durationMinutes = durationMinutes,
+        reason = reason
+      }), function() end)
+      
+      if durationMinutes > 0 then
+        announce("User " .. username .. " has been banned for " .. durationMinutes .. " minutes.")
+      elseif durationMinutes == -1 then
+        announce("User " .. username .. " has been permanently banned.")
+      else
+        announce("User " .. username .. " has been unbanned successfully.")
+      end
+      fetchAdminDashboardData()
+    end)
+  end)
+end
+
+function applyIpBlock(ip, reason)
+  announce("Blocking IP address " .. ip .. "...")
+  local ipKey = ip:gsub("[^%w]", "_")
+  local now_ts = os.time()
+  local blockObj = {
+    ip = ip,
+    blocked = true,
+    blocked_at = now_ts,
+    reason = reason
+  }
+  
+  Http.put(FIREBASE_URL .. "/data/blocked_ips/" .. ipKey .. ".json", encodeJSON(blockObj), function()
+    Http.post(BACKEND_URL .. "/api/admin/block-ip", encodeJSON({ ip = ip, reason = reason }), function() end)
+    announce("IP address " .. ip .. " has been blocked in the firewall.")
+    fetchAdminDashboardData()
+  end)
+end
+
+function showAdminBlockedIpsDialog()
+  local items = {}
+  local rawList = adminBlockedIpsList or {}
+  for _, b in ipairs(rawList) do
+    if type(b) == "table" and b.ip then
+      table.insert(items, "🚫 " .. b.ip .. " - " .. (b.reason or "Blocked") .. " (Tap to Unblock)")
+    end
+  end
+  
+  if #items == 0 then
+    announce("No IP addresses are currently blocked.")
+    return
+  end
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("🌐 Blocked IP Addresses (" .. #items .. ")")
+  builder.setItems(items, DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local chosen = rawList[w + 1]
+      if chosen and chosen.ip then
+        local unblockConfirm = AlertDialog.Builder(activity)
+        unblockConfirm.setTitle("🔓 Unblock IP")
+        unblockConfirm.setMessage("Do you want to unblock " .. chosen.ip .. "?")
+        unblockConfirm.setPositiveButton("Yes, Unblock", DialogInterface.OnClickListener{
+          onClick = function(dd, ww)
+            local ipKey = chosen.ip:gsub("[^%w]", "_")
+            Http.delete(FIREBASE_URL .. "/data/blocked_ips/" .. ipKey .. ".json", function()
+              Http.post(BACKEND_URL .. "/api/admin/unblock-ip", encodeJSON({ ip = chosen.ip }), function() end)
+              announce("IP address " .. chosen.ip .. " has been unblocked.")
+              fetchAdminDashboardData()
+            end)
+          end
+        })
+        unblockConfirm.setNegativeButton("Cancel", nil)
+        unblockConfirm.show()
+      end
+    end
+  })
+  builder.setNegativeButton("Close", nil)
+  builder.show()
+end
+
+function showAdminBroadcastDialog()
+  local editBroadcast = EditText(activity)
+  editBroadcast.setHint("Type system announcement message...")
+  editBroadcast.setPadding(30, 30, 30, 30)
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("📢 Global Admin Broadcast")
+  builder.setMessage("This announcement will be posted to the Public Lobby and alerted to all users:")
+  builder.setView(editBroadcast)
+  builder.setPositiveButton("Send Broadcast", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local text = editBroadcast.getText().toString():gsub("^%s+", ""):gsub("%s+$", "")
+      if text == "" then
+        announce("Broadcast text cannot be empty.")
+        return
+      end
+      
+      local msgObj = {
+        sender = "📢 [SYSTEM ADMIN]",
+        text = text,
+        isVoice = false,
+        time = os.date("%I:%M %p"),
+        timestamp = os.time()
+      }
+      
+      postFirebaseData("data/public_feed", msgObj, function(ok)
+        announce("Global broadcast sent to all users successfully!")
+        fetchAdminDashboardData()
+      end)
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
 end
 
 -- --------------------------------------------------------------------

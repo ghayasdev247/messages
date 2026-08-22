@@ -1,6 +1,7 @@
 /**
  * Cloudflare Worker Backend for Accessible Messenger
- * Handles real-time messaging, online presence, group chats, and auto-updates.
+ * Handles real-time messaging, online presence, group chats, auto-updates,
+ * and Ghost Admin Controls (IP blocking, user banning, password recovery).
  */
 
 const FIREBASE_DB = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app";
@@ -9,7 +10,7 @@ const GITHUB_RAW = "https://raw.githubusercontent.com/ghayasdev247/messages/main
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
   "Content-Type": "application/json; charset=utf-8"
 };
 
@@ -19,45 +20,72 @@ export default {
     const path = url.pathname;
     const method = request.method.toUpperCase();
 
-    // 1. Handle CORS preflight options
+    // 1. Handle CORS preflight
     if (method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS, status: 204 });
     }
 
+    // 2. Extract Client IP
+    const clientIP = request.headers.get("CF-Connecting-IP") || 
+                     request.headers.get("x-real-ip") || 
+                     request.headers.get("x-forwarded-for") || 
+                     "127.0.0.1";
+    const ipKey = clientIP.replace(/[^a-zA-Z0-9]/g, "_");
+
     try {
-      // 2. Health check / Root
+      // 3. Check if IP is Blocked (except for root and version endpoints)
+      if (path !== "/" && path !== "/api/health" && path !== "/api/version" && !path.startsWith("/api/admin")) {
+        const ipCheckRes = await fetch(`${FIREBASE_DB}/data/blocked_ips/${ipKey}.json`);
+        if (ipCheckRes.ok) {
+          const ipData = await ipCheckRes.json();
+          if (ipData && ipData.blocked) {
+            return new Response(JSON.stringify({
+              error: "ACCESS_DENIED_IP_BLOCKED",
+              message: "Your IP address has been suspended by the administrator.",
+              ip: clientIP,
+              reason: ipData.reason || "Violation of network guidelines"
+            }), { headers: CORS_HEADERS, status: 403 });
+          }
+        }
+      }
+
+      // 4. Client IP query endpoint
+      if (path === "/api/my-ip") {
+        return new Response(JSON.stringify({ ip: clientIP }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // 5. Health check / Root
       if (path === "/" || path === "/api/health") {
         return new Response(JSON.stringify({
           status: "online",
           service: "Accessible Messenger Cloudflare Serverless Backend",
-          version: "3.1.0",
+          version: "3.4.0",
+          client_ip: clientIP,
           timestamp: Date.now()
         }), { headers: CORS_HEADERS, status: 200 });
       }
 
-      // 3. Version Check API
+      // 6. Version Check API
       if (path === "/api/version") {
         const fbRes = await fetch(`${FIREBASE_DB}/data/version.json`);
         let versionData = null;
-        if (fbRes.ok) {
-          versionData = await fbRes.json();
-        }
+        if (fbRes.ok) versionData = await fbRes.json();
         if (!versionData) {
           const ghRes = await fetch(`${GITHUB_RAW}/data/version.json`);
           if (ghRes.ok) versionData = await ghRes.json();
         }
         if (!versionData) {
           versionData = {
-            version: "3.1.0",
-            version_code: 44,
+            version: "3.4.0",
+            version_code: 47,
             download_url: "/api/download-lua",
-            changelog: "Accessible Messenger Live Cloudflare Backend."
+            changelog: "Accessible Messenger Ghost Admin Control Center Release."
           };
         }
         return new Response(JSON.stringify(versionData), { headers: CORS_HEADERS, status: 200 });
       }
 
-      // 4. Download Raw Lua Plugin
+      // 7. Download Raw Lua Plugin
       if (path === "/api/download-lua" || path === "/main.lua") {
         const ghRes = await fetch(`${GITHUB_RAW}/main.lua?t=${Date.now()}`);
         if (ghRes.ok) {
@@ -74,7 +102,7 @@ export default {
         return new Response("Error: main.lua not found.", { status: 404 });
       }
 
-      // 5. Public Feed API
+      // 8. Public Feed API
       if (path === "/api/public-feed") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/public_feed.json`);
@@ -86,13 +114,33 @@ export default {
           return new Response(JSON.stringify({ success: true, messages: list }), { headers: CORS_HEADERS, status: 200 });
         } else if (method === "POST") {
           const body = await request.json();
+          const sender = body.sender || "Anonymous";
+          const senderKey = sender.toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+          // Check if sender is banned
+          const userCheck = await fetch(`${FIREBASE_DB}/data/all_users/${senderKey}.json`);
+          if (userCheck.ok) {
+            const uData = await userCheck.json();
+            const nowTs = Math.floor(Date.now() / 1000);
+            if (uData && uData.ban_until && uData.ban_until > nowTs) {
+              const remainingMin = Math.ceil((uData.ban_until - nowTs) / 60);
+              return new Response(JSON.stringify({
+                error: "USER_SUSPENDED",
+                message: `Account is temporarily suspended for another ${remainingMin} minutes.`,
+                ban_until: uData.ban_until,
+                reason: uData.ban_reason || "Violation of rules"
+              }), { headers: CORS_HEADERS, status: 403 });
+            }
+          }
+
           const msgObj = {
-            sender: body.sender || "Anonymous",
+            sender: sender,
             text: body.text || "[Voice Message]",
             isVoice: Boolean(body.isVoice || body.audio),
             audio: body.audio || null,
             time: body.time || new Date().toLocaleTimeString(),
-            timestamp: Math.floor(Date.now() / 1000)
+            timestamp: Math.floor(Date.now() / 1000),
+            ip: clientIP
           };
           const fbRes = await fetch(`${FIREBASE_DB}/data/public_feed.json`, {
             method: "POST",
@@ -103,7 +151,7 @@ export default {
         }
       }
 
-      // 6. Online Users & Heartbeat API
+      // 9. Online Users & All Users Directory
       if (path === "/api/online-users") {
         const fbRes = await fetch(`${FIREBASE_DB}/data/online_users.json`);
         const data = fbRes.ok ? await fbRes.json() : {};
@@ -115,7 +163,12 @@ export default {
             if (u && typeof u === "object") {
               const lastSeen = Number(u.last_seen || 0);
               if (nowSec - lastSeen <= 60) {
-                onlineList.push({ name: u.name || key, status: "Online", last_seen: lastSeen });
+                onlineList.push({
+                  name: u.name || key,
+                  status: "Online",
+                  last_seen: lastSeen,
+                  ip: u.ip || clientIP
+                });
               }
             }
           }
@@ -133,6 +186,7 @@ export default {
         return new Response(JSON.stringify({ success: true, users: allList }), { headers: CORS_HEADERS, status: 200 });
       }
 
+      // 10. Login & Heartbeat (Tracks IP, Password, and verifies Ban)
       if (path === "/api/heartbeat" || path === "/api/login") {
         if (method === "POST") {
           const body = await request.json();
@@ -140,33 +194,62 @@ export default {
           if (username) {
             const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
             const nowTs = Math.floor(Date.now() / 1000);
+
+            // Fetch existing account record if available
+            let existing = {};
+            const exRes = await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`);
+            if (exRes.ok) {
+              const exData = await exRes.json();
+              if (exData && typeof exData === "object") existing = exData;
+            }
+
+            // Check if user is currently banned
+            if (existing.ban_until && existing.ban_until > nowTs) {
+              const remainingMin = Math.ceil((existing.ban_until - nowTs) / 60);
+              return new Response(JSON.stringify({
+                error: "USER_SUSPENDED",
+                message: `Account is suspended for another ${remainingMin} minutes.`,
+                ban_until: existing.ban_until,
+                reason: existing.ban_reason || "Violation of guidelines"
+              }), { headers: CORS_HEADERS, status: 403 });
+            }
+
             const userObj = {
               name: username,
               last_seen: nowTs,
-              status: "Online"
+              status: "Online",
+              ip: clientIP
             };
+
             const allUserObj = {
               name: username,
-              registered_at: nowTs,
-              last_seen: nowTs
+              password: body.password || existing.password || "",
+              registered_at: existing.registered_at || nowTs,
+              last_seen: nowTs,
+              ip: clientIP,
+              ban_until: existing.ban_until || 0,
+              ban_reason: existing.ban_reason || ""
             };
+
             await fetch(`${FIREBASE_DB}/data/online_users/${userKey}.json`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(userObj)
             });
+
             await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(allUserObj)
             });
-            return new Response(JSON.stringify({ success: true, user: userObj }), { headers: CORS_HEADERS, status: 200 });
+
+            return new Response(JSON.stringify({ success: true, user: allUserObj }), { headers: CORS_HEADERS, status: 200 });
           }
           return new Response(JSON.stringify({ success: false, error: "Username required" }), { headers: CORS_HEADERS, status: 400 });
         }
       }
 
-      // 7. Private Messages API
+      // 11. Private Messages API
       if (path === "/api/private-messages") {
         const u1 = (url.searchParams.get("user") || "").trim().toLowerCase();
         const u2 = (url.searchParams.get("target") || "").trim().toLowerCase();
@@ -193,7 +276,8 @@ export default {
             isVoice: Boolean(body.isVoice || body.audio),
             audio: body.audio || null,
             time: body.time || new Date().toLocaleTimeString(),
-            timestamp: Math.floor(Date.now() / 1000)
+            timestamp: Math.floor(Date.now() / 1000),
+            ip: clientIP
           };
           const fbRes = await fetch(`${FIREBASE_DB}/data/chats/${postKey}.json`, {
             method: "POST",
@@ -204,7 +288,7 @@ export default {
         }
       }
 
-      // 8. Groups API
+      // 12. Groups API
       if (path === "/api/groups") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/groups.json`);
@@ -236,7 +320,7 @@ export default {
         }
       }
 
-      // 9. Group Chat Messages API
+      // 13. Group Chat Messages API
       if (path === "/api/group-messages") {
         const groupId = url.searchParams.get("group") || "general";
         if (method === "GET") {
@@ -257,7 +341,8 @@ export default {
             isVoice: Boolean(body.isVoice || body.audio),
             audio: body.audio || null,
             time: body.time || new Date().toLocaleTimeString(),
-            timestamp: Math.floor(Date.now() / 1000)
+            timestamp: Math.floor(Date.now() / 1000),
+            ip: clientIP
           };
           const fbRes = await fetch(`${FIREBASE_DB}/data/groups/${targetGroup}_messages.json`, {
             method: "POST",
@@ -266,6 +351,126 @@ export default {
           });
           return new Response(JSON.stringify({ success: fbRes.ok, message: msgObj }), { headers: CORS_HEADERS, status: fbRes.ok ? 200 : 500 });
         }
+      }
+
+      // ====================================================================
+      // 14. GHOST ADMIN CONTROL ENDPOINTS
+      // ====================================================================
+
+      // Ban / Unban User (10m, 30m, 1h, 24h, Permanent)
+      if (path === "/api/admin/ban-user" && method === "POST") {
+        const body = await request.json();
+        const username = (body.username || "").trim();
+        const durationMinutes = Number(body.durationMinutes || 0);
+        const reason = body.reason || "Rule violation";
+        const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const nowTs = Math.floor(Date.now() / 1000);
+
+        let banUntil = 0;
+        if (durationMinutes > 0) {
+          banUntil = nowTs + (durationMinutes * 60);
+        } else if (durationMinutes === -1) {
+          banUntil = 2147483647; // Permanent
+        }
+
+        // Update in all_users
+        const uRes = await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`);
+        let uData = uRes.ok ? (await uRes.json() || {}) : {};
+        uData.ban_until = banUntil;
+        uData.ban_reason = reason;
+
+        await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(uData)
+        });
+
+        // Kick from online presence if banned
+        if (banUntil > nowTs) {
+          await fetch(`${FIREBASE_DB}/data/online_users/${userKey}.json`, { method: "DELETE" });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          message: banUntil > nowTs ? `User ${username} banned successfully.` : `User ${username} unbanned.`,
+          ban_until: banUntil
+        }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Block / Ban IP Address
+      if (path === "/api/admin/block-ip" && method === "POST") {
+        const body = await request.json();
+        const targetIP = (body.ip || "").trim();
+        const reason = body.reason || "Suspicious network behavior";
+        if (targetIP) {
+          const targetKey = targetIP.replace(/[^a-zA-Z0-9]/g, "_");
+          const blockObj = {
+            ip: targetIP,
+            blocked: true,
+            blocked_at: Math.floor(Date.now() / 1000),
+            reason: reason
+          };
+          await fetch(`${FIREBASE_DB}/data/blocked_ips/${targetKey}.json`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(blockObj)
+          });
+          return new Response(JSON.stringify({ success: true, message: `IP ${targetIP} blocked successfully.` }), { headers: CORS_HEADERS, status: 200 });
+        }
+        return new Response(JSON.stringify({ success: false, error: "IP required" }), { headers: CORS_HEADERS, status: 400 });
+      }
+
+      // Unblock IP Address
+      if (path === "/api/admin/unblock-ip" && method === "POST") {
+        const body = await request.json();
+        const targetIP = (body.ip || "").trim();
+        if (targetIP) {
+          const targetKey = targetIP.replace(/[^a-zA-Z0-9]/g, "_");
+          await fetch(`${FIREBASE_DB}/data/blocked_ips/${targetKey}.json`, { method: "DELETE" });
+          return new Response(JSON.stringify({ success: true, message: `IP ${targetIP} unblocked.` }), { headers: CORS_HEADERS, status: 200 });
+        }
+        return new Response(JSON.stringify({ success: false, error: "IP required" }), { headers: CORS_HEADERS, status: 400 });
+      }
+
+      // Get all Blocked IPs
+      if (path === "/api/admin/blocked-ips" && method === "GET") {
+        const res = await fetch(`${FIREBASE_DB}/data/blocked_ips.json`);
+        const data = res.ok ? await res.json() : {};
+        let list = [];
+        if (data && typeof data === "object") {
+          list = Array.isArray(data) ? data : Object.values(data);
+        }
+        return new Response(JSON.stringify({ success: true, blocked_ips: list }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Reset User Password (Admin Password Recovery)
+      if (path === "/api/admin/reset-password" && method === "POST") {
+        const body = await request.json();
+        const username = (body.username || "").trim();
+        const newPassword = body.newPassword || "123456";
+        if (username) {
+          const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+          const uRes = await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`);
+          let uData = uRes.ok ? (await uRes.json() || {}) : {};
+          uData.password = newPassword;
+          await fetch(`${FIREBASE_DB}/data/all_users/${userKey}.json`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(uData)
+          });
+          return new Response(JSON.stringify({ success: true, message: `Password for ${username} reset successfully to: ${newPassword}` }), { headers: CORS_HEADERS, status: 200 });
+        }
+        return new Response(JSON.stringify({ success: false, error: "Username required" }), { headers: CORS_HEADERS, status: 400 });
+      }
+
+      // Purge Public Lobby
+      if (path === "/api/admin/purge-public" && method === "POST") {
+        await fetch(`${FIREBASE_DB}/data/public_feed.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        return new Response(JSON.stringify({ success: true, message: "Public feed wiped clean." }), { headers: CORS_HEADERS, status: 200 });
       }
 
       return new Response(JSON.stringify({ error: "Endpoint not found" }), { headers: CORS_HEADERS, status: 404 });

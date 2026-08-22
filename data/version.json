@@ -1,7 +1,7 @@
 {
-  "version": "3.3.0",
-  "version_code": 46,
+  "version": "3.4.0",
+  "version_code": 47,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.3.0: All registered user accounts permanently visible in New Chat directory (with online/offline status) and Public Lobby 24-hour expiration removed."
+  "changelog": "Version 3.4.0: Master Ghost Admin Control Panel, User Account & Password Recovery, 10m/30m/1h/Permanent Ban System, and IP Address Firewall."
 }

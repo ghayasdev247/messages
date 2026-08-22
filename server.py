@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.3.0",
-                "version_code": 46,
+                "version": "3.4.0",
+                "version_code": 47,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.3.0: All registered user accounts permanently visible in New Chat directory (with online/offline status) and Public Lobby 24-hour expiration removed."
+                "changelog": "Version 3.4.0: Master Ghost Admin Control Panel, User Account & Password Recovery, 10m/30m/1h/Permanent Ban System, and IP Address Firewall."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
