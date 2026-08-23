@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.9.1",
-                "version_code": 61,
+                "version": "3.9.2",
+                "version_code": 62,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.9.1: Fixed getAppDataDir nil value runtime error during local delta caching and private chat initialisation."
+                "changelog": "Version 3.9.2: Implemented native Lua readFile and writeFile helpers for seamless local caching and delta synchronization."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

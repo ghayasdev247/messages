@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.9.1"
-local APP_VERSION_CODE = 61
+local APP_VERSION = "3.9.2"
+local APP_VERSION_CODE = 62
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -869,6 +869,31 @@ end
 -- --------------------------------------------------------------------
 -- ⚡ ULTRA-LOW BANDWIDTH LOCAL CACHE & DELTA SYNC ENGINE
 -- --------------------------------------------------------------------
+function readFile(filePath)
+  local result = ""
+  pcall(function()
+    local f = io.open(filePath, "r")
+    if f then
+      result = f:read("*a")
+      f:close()
+    end
+  end)
+  return result
+end
+
+function writeFile(filePath, content)
+  local ok = false
+  pcall(function()
+    local f = io.open(filePath, "w")
+    if f then
+      f:write(content or "")
+      f:close()
+      ok = true
+    end
+  end)
+  return ok
+end
+
 function getLocalCachePath(key)
   local safeKey = string.lower(tostring(key or "default")):gsub("[^%w_-]", "_")
   return getAppDataDir() .. "/cache_" .. safeKey .. ".json"
