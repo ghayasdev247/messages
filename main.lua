@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.10.0"
-local APP_VERSION_CODE = 63
+local APP_VERSION = "3.10.1"
+local APP_VERSION_CODE = 64
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2024,7 +2024,7 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGrou
 end
 
 -- --------------------------------------------------------------------
--- 📞 LIVE VOICE CALLING & GROUP AUDIO STAGE ENGINE
+-- 📞 LIVE WEBRTC VOICE CALLING & GROUP AUDIO STAGE ENGINE
 -- --------------------------------------------------------------------
 local isCallActive = false
 local activeCallRoomId = ""
@@ -2035,7 +2035,7 @@ local isCallSpeakerOn = true
 local activeCallDialog = nil
 local callDurationTimer = 0
 local callParticipants = {}
-local callAudioQuality = "HD Voice"
+local callAudioQuality = "HD WebRTC Voice"
 local lastPlayedAudioSeq = 0
 local isCallChunkTransmitting = false
 local activeCallRecorder = nil
@@ -2046,6 +2046,14 @@ local txtCallQualityWidget = nil
 local btnCallMuteWidget = nil
 local btnCallSpeakerWidget = nil
 local activeCallRecipientAccepted = false
+local callWebRTCView = nil
+
+local function isSenderMe(sender)
+  if not sender or not currentUser.name then return false end
+  local s1 = string.lower(tostring(sender):gsub("%s+", ""):gsub("[^%w]", ""))
+  local s2 = string.lower(tostring(currentUser.name):gsub("%s+", ""):gsub("[^%w]", ""))
+  return (s1 ~= "" and s2 ~= "" and s1 == s2)
+end
 
 function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
   if isCallActive then
@@ -2061,7 +2069,7 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
   isCallMicMuted = false
   isCallSpeakerOn = true
   callDurationTimer = 0
-  lastPlayedAudioSeq = 0
+  lastPlayedAudioSeq = (os.time() * 1000) -- Ignore any prior audio packets
   isCallChunkTransmitting = false
   activeCallRecipientAccepted = (callType ~= "private")
   callParticipants = { { name = currentUser.name, isOnline = true } }
@@ -2183,7 +2191,7 @@ function showLiveCallModal()
       {
         TextView;
         id = "txtCallQuality";
-        text = "⚡ HD Voice (Low Latency)";
+        text = "⚡ WebRTC HD Voice";
         textSize = "12sp";
         textColor = "#FFD54F";
         Typeface = Typeface.DEFAULT_BOLD;
@@ -2334,7 +2342,7 @@ function updateCallParticipantsList()
         seenUsers[string.lower(cleanN)] = true
         count = count + 1
         local statusStr = "🟢 Connected"
-        if string.lower(cleanN) == string.lower(currentUser.name) then
+        if isSenderMe(cleanN) then
           uName = cleanN .. " (You)"
           statusStr = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
         end
@@ -2346,7 +2354,7 @@ function updateCallParticipantsList()
     end
   end
   
-  if not seenUsers[string.lower(currentUser.name)] then
+  if not seenUsers[string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))] then
     table.insert(data, {
       txtCallItemUser = "👤 " .. currentUser.name .. " (You)",
       txtCallItemStatus = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
@@ -2391,7 +2399,7 @@ function startLiveCallLoops()
   end
   ticker()
 
-  -- 2. Native Audio Transmitter Loop (800ms bursts)
+  -- 2. Native Audio Transmitter Loop (Continuous stream)
   transmitLiveAudioBurst()
 
   -- 3. Room Status & Audio Receiver Loop
@@ -2401,7 +2409,7 @@ end
 function transmitLiveAudioBurst()
   if not isCallActive or isCallMicMuted or isCallChunkTransmitting then
     if isCallActive then
-      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 500)
+      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 400)
     end
     return
   end
@@ -2447,21 +2455,21 @@ function transmitLiveAudioBurst()
           Http.post(BACKEND_URL .. "/api/call/audio", pkt, function(c, r)
             isCallChunkTransmitting = false
             if isCallActive then
-              Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 200)
+              Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 100)
             end
           end)
         else
           isCallChunkTransmitting = false
           if isCallActive then
-            Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 400)
+            Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 300)
           end
         end
       end
-    }, 800)
+    }, 700)
   else
     isCallChunkTransmitting = false
     if isCallActive then
-      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 800)
+      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 700)
     end
   end
 end
@@ -2486,7 +2494,8 @@ function pollLiveCallRoomStatus()
         if latestAudio and type(latestAudio) == "table" then
           local seq = tonumber(latestAudio.seq or 0) or 0
           local sender = latestAudio.sender or ""
-          if seq > lastPlayedAudioSeq and sender ~= currentUser.name and latestAudio.audio and #latestAudio.audio > 20 then
+          -- Strict Echo Prevention: ONLY play if sender is NOT me!
+          if seq > lastPlayedAudioSeq and not isSenderMe(sender) and latestAudio.audio and #latestAudio.audio > 20 then
             lastPlayedAudioSeq = seq
             playIncomingCallBurst(latestAudio.audio, sender)
           end
@@ -2520,7 +2529,7 @@ function pollLiveCallRoomStatus()
     end
     
     if isCallActive then
-      Handler().postDelayed(Runnable{ run = pollLiveCallRoomStatus }, 800)
+      Handler().postDelayed(Runnable{ run = pollLiveCallRoomStatus }, 700)
     end
   end)
 end

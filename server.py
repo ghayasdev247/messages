@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.10.0",
-                "version_code": 63,
+                "version": "3.10.1",
+                "version_code": 64,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.10.0: High-Definition Live Voice Calling & Group Audio Stage Engine (Fixed connecting delay, instant 1-on-1 ringing & connection detection, low-latency live audio streaming)."
+                "changelog": "Version 3.10.1: Fixed voice call self-echo loop and delayed audio return in Public Stage, Lounge Groups, and 1-on-1 Calls."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
