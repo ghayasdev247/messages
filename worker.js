@@ -173,6 +173,23 @@ export default {
         return new Response("Error: main.lua not found.", { status: 404 });
       }
 
+      // 7B. Universal Web Client Endpoint (v3.10.1)
+      if (path === "/web" || path === "/app" || path === "/client" || path === "/pc_web_client.html") {
+        const ghRes = await fetch(`${GITHUB_RAW}/pc_web_client.html?t=${Date.now()}`);
+        if (ghRes.ok) {
+          const html = await ghRes.text();
+          return new Response(html, {
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              "Access-Control-Allow-Origin": "*",
+              "Cache-Control": "no-cache"
+            },
+            status: 200
+          });
+        }
+        return new Response("Error: pc_web_client.html not found.", { status: 404 });
+      }
+
       // ====================================================================
       // 8. LIVE VOICE CALL & GROUP AUDIO STAGE ENGINE
       // ====================================================================

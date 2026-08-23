@@ -250,6 +250,14 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
 
+        elif path in ("/", "/web", "/app", "/pc_web_client.html"):
+            self._set_headers(200, "text/html; charset=utf-8")
+            if os.path.exists("pc_web_client.html"):
+                with open("pc_web_client.html", "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.wfile.write(b"<h1>Accessible Messenger Web Client</h1>")
+
         elif path == "/api/download-lua":
             self._set_headers(200, "text/plain; charset=utf-8")
             if os.path.exists("main.lua"):
