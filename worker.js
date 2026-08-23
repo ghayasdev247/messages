@@ -10,9 +10,49 @@ const GITHUB_RAW = "https://raw.githubusercontent.com/ghayasdev247/messages/main
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, If-None-Match, Idempotency-Key, X-Requested-With",
+  "Access-Control-Expose-Headers": "ETag, Retry-After",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "X-XSS-Protection": "1; mode=block",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
   "Content-Type": "application/json; charset=utf-8"
 };
+
+// Global Sliding-Window Rate Limiting Engine
+const ipRateLimits = new Map();
+function checkGlobalRateLimit(ip, route, maxHits = 40, windowMs = 5000) {
+  const now = Date.now();
+  const bucketKey = `${ip}:${route}`;
+  let bucket = ipRateLimits.get(bucketKey);
+  if (!bucket || now - bucket.start > windowMs) {
+    bucket = { start: now, count: 1 };
+    ipRateLimits.set(bucketKey, bucket);
+    return { allowed: true };
+  }
+  bucket.count++;
+  if (bucket.count > maxHits) {
+    const retryAfter = Math.ceil((bucket.start + windowMs - now) / 1000);
+    return { allowed: false, retryAfter };
+  }
+  return { allowed: true };
+}
+
+// Global String Sanitizer (Anti-XSS & Length Control)
+function sanitizeText(input, maxLen = 4000) {
+  if (typeof input !== "string") return "";
+  return input
+    .trim()
+    .slice(0, maxLen)
+    .replace(/[<>]/g, (tag) => (tag === "<" ? "&lt;" : "&gt;"));
+}
+
+function sanitizeUsername(input) {
+  if (typeof input !== "string") return "User";
+  const clean = input.trim().replace(/[^a-zA-Z0-9_\-.\s]/g, "").slice(0, 35);
+  return clean || "User";
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -32,8 +72,25 @@ export default {
                      "127.0.0.1";
     const ipKey = clientIP.replace(/[^a-zA-Z0-9]/g, "_");
 
+    // 3. Apply Global Rate Limiting by Route Category
+    const routeCategory = path.startsWith("/api/audio/upload") ? "audio_upload" :
+                          (method === "POST" && path.includes("message")) ? "send_message" : "general";
+    const maxAllowed = routeCategory === "audio_upload" ? 12 :
+                       routeCategory === "send_message" ? 25 : 60;
+    const rateCheck = checkGlobalRateLimit(clientIP, routeCategory, maxAllowed, 5000);
+    if (!rateCheck.allowed) {
+      return new Response(JSON.stringify({
+        error: "RATE_LIMIT_EXCEEDED",
+        message: `Too many requests. Please slow down and try again in ${rateCheck.retryAfter} seconds.`,
+        retry_after: rateCheck.retryAfter
+      }), {
+        headers: { ...CORS_HEADERS, "Retry-After": String(rateCheck.retryAfter) },
+        status: 429
+      });
+    }
+
     try {
-      // 3. Check if IP is Blocked (except for root, version, ping)
+      // 4. Check if IP is Blocked (except for root, version, ping)
       if (path !== "/" && path !== "/api/health" && path !== "/api/ping" && path !== "/api/version" && !path.startsWith("/api/admin")) {
         const ipCheckRes = await fetch(`${FIREBASE_DB}/data/blocked_ips/${ipKey}.json`);
         if (ipCheckRes.ok) {
@@ -49,7 +106,7 @@ export default {
         }
       }
 
-      // 4. Client IP & Latency Ping endpoint
+      // 5. Client IP & Latency Ping endpoint
       if (path === "/api/my-ip") {
         return new Response(JSON.stringify({ ip: clientIP }), { headers: CORS_HEADERS, status: 200 });
       }
