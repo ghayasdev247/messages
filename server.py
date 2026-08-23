@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.9.2",
-                "version_code": 62,
+                "version": "3.10.0",
+                "version_code": 63,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.9.2: Implemented native Lua readFile and writeFile helpers for seamless local caching and delta synchronization."
+                "changelog": "Version 3.10.0: High-Definition Live Voice Calling & Group Audio Stage Engine (Fixed connecting delay, instant 1-on-1 ringing & connection detection, low-latency live audio streaming)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

@@ -1,7 +1,7 @@
 {
-  "version": "3.9.2",
-  "version_code": 62,
+  "version": "3.10.0",
+  "version_code": 63,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.9.2: Implemented native Lua readFile and writeFile helpers for seamless local caching and delta synchronization."
+  "changelog": "Version 3.10.0: High-Definition Live Voice Calling & Group Audio Stage Engine (Fixed connecting delay, instant 1-on-1 ringing & connection detection, low-latency live audio streaming)."
 }
