@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.10.1"
-local APP_VERSION_CODE = 64
+local APP_VERSION = "3.11.0"
+local APP_VERSION_CODE = 65
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2075,7 +2075,12 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
   callParticipants = { { name = currentUser.name, isOnline = true } }
   
   setCallSpeakerRoute(true)
-  announce("Connecting to " .. activeCallTitle .. "...")
+  announce(activeCallTitle .. " active.")
+  
+  -- Open modal and start streaming IMMEDIATELY (0ms delay)
+  showLiveCallModal()
+  updateCallParticipantsList()
+  startLiveCallLoops()
   
   local joinPayload = encodeJSON({
     roomId = activeCallRoomId,
@@ -2083,12 +2088,7 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
     isMuted = false,
     quality = "HD"
   })
-  
-  Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function(code, res)
-    showLiveCallModal()
-    updateCallParticipantsList()
-    startLiveCallLoops()
-  end)
+  Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function() end)
 end
 
 function leaveActiveVoiceCall()
@@ -6908,10 +6908,25 @@ function setPresenceOffline()
   end)
 end
 
+local isSignalPollingRunning = false
+function startFastCallSignalLoop()
+  if isSignalPollingRunning then return end
+  isSignalPollingRunning = true
+  local function signalPoll()
+    if currentUser.online and not isCallActive then
+      checkIncomingCallSignals()
+    end
+    Handler().postDelayed(Runnable{ run = signalPoll }, 1500)
+  end
+  signalPoll()
+end
+
 function startPollingLoop()
   if isPolling then return end
   isPolling = true
   lastHeartbeatTimestamp = 0
+  
+  startFastCallSignalLoop()
   
   local function poll()
     if not currentUser.online or not isPolling then return end
@@ -6936,9 +6951,6 @@ function startPollingLoop()
     elseif activeTab == "lounge" then
       fetchGroupsList()
     end
-    
-    -- Check for incoming private voice calls
-    checkIncomingCallSignals()
     
     Handler().postDelayed(Runnable{ run = poll }, 5000)
   end

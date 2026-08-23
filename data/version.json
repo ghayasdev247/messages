@@ -1,7 +1,7 @@
 {
-  "version": "3.10.1",
-  "version_code": 64,
+  "version": "3.11.0",
+  "version_code": 65,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.10.1: Fixed voice call self-echo loop and delayed audio return in Public Stage, Lounge Groups, and 1-on-1 Calls."
+  "changelog": "Version 3.11.0: Instant Zero-Lag Call Initialization, 1.5s High-Speed Incoming Call Signaling, and Echo-Free Real-Time Audio Streaming."
 }
