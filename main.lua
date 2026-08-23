@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.6.0"
-local APP_VERSION_CODE = 54
+local APP_VERSION = "3.7.0"
+local APP_VERSION_CODE = 55
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2746,24 +2746,24 @@ function showMainAppContainer()
       {
         Button;
         id = "tabBtnHome";
-        text = "🏠 Home";
+        text = "💬 Chats";
         layout_weight = "1";
         layout_height = "fill";
         textSize = "12sp";
         textColor = "#075E54";
         backgroundColor = "#FFFFFF";
-        ContentDescription = "Home Tab. Double tap to open.";
+        ContentDescription = "Chats Inbox Tab. Double tap to open active conversations.";
       };
       {
         Button;
         id = "tabBtnLounge";
-        text = "🚀 Lounge";
+        text = "👥 Lounge";
         layout_weight = "1";
         layout_height = "fill";
         textSize = "12sp";
         textColor = "#555555";
         backgroundColor = "#FFFFFF";
-        ContentDescription = "Lounge Groups Tab. Double tap to open.";
+        ContentDescription = "Community Lounge Groups Tab. Double tap to open.";
       };
       {
         Button;
@@ -2779,24 +2779,24 @@ function showMainAppContainer()
       {
         Button;
         id = "tabBtnPrivate";
-        text = "💬 Private";
+        text = "👤 Contacts";
         layout_weight = "1";
         layout_height = "fill";
         textSize = "12sp";
         textColor = "#555555";
         backgroundColor = "#FFFFFF";
-        ContentDescription = "Private Lobby Tab. Double tap to open.";
+        ContentDescription = "Contacts and Online Users Tab. Double tap to open.";
       };
       {
         Button;
         id = "tabBtnYou";
-        text = "👤 You";
+        text = "⚙️ Settings";
         layout_weight = "1";
         layout_height = "fill";
         textSize = "12sp";
         textColor = "#555555";
         backgroundColor = "#FFFFFF";
-        ContentDescription = "You Profile and Settings Tab. Double tap to open.";
+        ContentDescription = "Settings and Profile Tab. Double tap to open.";
       };
     };
   }
@@ -2840,7 +2840,7 @@ function switchTab(tabName)
   
   if tabName == "home" then
     tabContentContainer.addView(createHomeTabView())
-    announce("Home Tab selected.")
+    announce("Chats Inbox Tab selected.")
   elseif tabName == "lounge" then
     tabContentContainer.addView(createLoungeTabView())
     fetchGroupsList()
@@ -2852,10 +2852,10 @@ function switchTab(tabName)
   elseif tabName == "private" then
     tabContentContainer.addView(createPrivateTabView())
     fetchOnlineUsersList()
-    announce("Private Lobby Tab selected.")
+    announce("Contacts and Online Users Tab selected.")
   elseif tabName == "you" then
     tabContentContainer.addView(createYouTabView())
-    announce("You Profile & Settings Tab selected.")
+    announce("Settings and Profile Tab selected.")
   elseif tabName == "admin" then
     tabContentContainer.addView(createAdminTabView())
     announce("Ghost Admin Control Dashboard opened.")
@@ -2865,178 +2865,455 @@ end
 -- --------------------------------------------------------------------
 -- TAB 1: HOME VIEW
 -- --------------------------------------------------------------------
+-- --------------------------------------------------------------------
+-- TAB 1: DYNAMIC RECENT 1-ON-1 CHATS INBOX & NEW CHAT FAB
+-- --------------------------------------------------------------------
+local listHomeRecentChatsWidget = nil
+local layoutHomeEmptyStateWidget = nil
+local editHomeSearchChatsWidget = nil
+local homeSearchQuery = ""
+
 function createHomeTabView()
+  homeSearchQuery = ""
+  
   local viewLayout = {
-    ScrollView;
+    LinearLayout;
+    orientation = "vertical";
     layout_width = "fill";
     layout_height = "fill";
-    padding = "16dp";
+    padding = "12dp";
     backgroundColor = "#F4F6F9";
     {
       LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      layout_marginBottom = "10dp";
+      padding = "4dp";
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_weight = "1";
+        {
+          TextView;
+          text = "💬 Chats Inbox";
+          textSize = "20sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
+          ContentDescription = "Chats Inbox Header";
+        };
+        {
+          TextView;
+          id = "txtHomeSubtitle";
+          text = "Logged in as " .. currentUser.name;
+          textSize = "12sp";
+          textColor = "#555555";
+        };
+      };
+      {
+        Button;
+        id = "btnHomeNewChat";
+        text = "➕ New Chat";
+        textSize = "13sp";
+        layout_width = "110dp";
+        layout_height = "46dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Start new conversation button. Double tap to choose a contact.";
+      };
+    };
+    {
+      LinearLayout;
+      id = "cardAdminQuickAccess";
       orientation = "vertical";
       layout_width = "fill";
-      layout_height = "wrap";
+      padding = "12dp";
+      backgroundColor = "#FFF3E0";
+      layout_marginBottom = "10dp";
+      elevation = "2dp";
+      visibility = (isAdminMode or string.lower(currentUser.name) == string.lower(GHOST_ADMIN_USER)) and View.VISIBLE or View.GONE;
       {
         TextView;
-        text = "Welcome back, " .. currentUser.name .. "!";
-        textSize = "22sp";
+        text = "👑 Ghost Admin Center";
+        textSize = "15sp";
+        textColor = "#B71C1C";
+        Typeface = Typeface.DEFAULT_BOLD;
+      };
+      {
+        Button;
+        id = "btnHomeOpenAdmin";
+        text = "👑 Open Admin Dashboard";
+        layout_width = "fill";
+        layout_height = "42dp";
+        layout_marginTop = "6dp";
+        backgroundColor = "#C62828";
+        textColor = "#FFFFFF";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Open Ghost Admin Dashboard button. Double tap to enter.";
+      };
+    };
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      layout_marginBottom = "8dp";
+      gravity = "center_vertical";
+      {
+        EditText;
+        id = "editHomeSearchChats";
+        hint = "🔍 Search chats...";
+        layout_weight = "1";
+        textSize = "14sp";
+        padding = "10dp";
+        backgroundColor = "#FFFFFF";
+        ContentDescription = "Search recent conversation threads";
+      };
+      {
+        Button;
+        id = "btnHomeRefreshChats";
+        text = "🔄";
+        layout_width = "45dp";
+        layout_height = "45dp";
+        backgroundColor = "#128C7E";
+        textColor = "#FFFFFF";
+        textSize = "14sp";
+        layout_marginLeft = "4dp";
+        ContentDescription = "Refresh recent chats list button";
+      };
+    };
+    {
+      LinearLayout;
+      id = "layoutHomeEmptyState";
+      orientation = "vertical";
+      layout_width = "fill";
+      padding = "24dp";
+      gravity = "center";
+      backgroundColor = "#FFFFFF";
+      elevation = "2dp";
+      layout_marginTop = "10dp";
+      visibility = View.GONE;
+      {
+        TextView;
+        text = "💬 No Active Conversations Yet";
+        textSize = "17sp";
         textColor = "#075E54";
         Typeface = Typeface.DEFAULT_BOLD;
-        layout_marginBottom = "4dp";
+        gravity = "center";
+        layout_marginBottom = "6dp";
       };
       {
         TextView;
-        text = "● Connected to Realtime Cloud (v" .. APP_VERSION .. ")";
-        textSize = "14sp";
-        textColor = "#2E7D32";
+        text = "You have not started any 1-on-1 private chats yet. Tap '+ New Chat' above to pick a user and start messaging!";
+        textSize = "13sp";
+        textColor = "#666666";
+        gravity = "center";
         layout_marginBottom = "16dp";
       };
       {
-        LinearLayout;
-        id = "cardAdminQuickAccess";
-        orientation = "vertical";
+        Button;
+        id = "btnHomeEmptyStartChat";
+        text = "➕ Start a Conversation Now";
         layout_width = "fill";
-        padding = "16dp";
-        backgroundColor = "#FFF3E0";
-        layout_marginBottom = "14dp";
-        elevation = "3dp";
-        visibility = (isAdminMode or string.lower(currentUser.name) == string.lower(GHOST_ADMIN_USER)) and View.VISIBLE or View.GONE;
-        {
-          TextView;
-          text = "👑 Ghost Admin Control Center";
-          textSize = "17sp";
-          textColor = "#B71C1C";
-          Typeface = Typeface.DEFAULT_BOLD;
-        };
-        {
-          TextView;
-          text = "Manage registered accounts, view/reset forgotten passwords, issue 10m/30m/1h/permanent bans, and block suspicious IPs.";
-          textSize = "13sp";
-          textColor = "#BF360C";
-          layout_marginTop = "4dp";
-          layout_marginBottom = "10dp";
-        };
-        {
-          Button;
-          id = "btnHomeOpenAdmin";
-          text = "👑 Open Admin Dashboard";
-          layout_width = "fill";
-          layout_height = "48dp";
-          backgroundColor = "#C62828";
-          textColor = "#FFFFFF";
-          Typeface = Typeface.DEFAULT_BOLD;
-          ContentDescription = "Open Ghost Admin Dashboard button. Double tap to enter.";
-        };
+        layout_height = "48dp";
+        backgroundColor = "#00796B";
+        textColor = "#FFFFFF";
+        textSize = "15sp";
+        Typeface = Typeface.DEFAULT_BOLD;
+        ContentDescription = "Start a new conversation now button";
+      };
+    };
+    {
+      ListView;
+      id = "listHomeRecentChats";
+      layout_width = "fill";
+      layout_weight = "1";
+      divider = nil;
+      dividerHeight = "6dp";
+    };
+  }
+
+  local view, views = loadlayout(viewLayout)
+  listHomeRecentChatsWidget = (views and views.listHomeRecentChats) or listHomeRecentChats
+  layoutHomeEmptyStateWidget = (views and views.layoutHomeEmptyState) or layoutHomeEmptyState
+  editHomeSearchChatsWidget = (views and views.editHomeSearchChats) or editHomeSearchChats
+  local btnHomeNewChat = (views and views.btnHomeNewChat) or btnHomeNewChat
+  local btnHomeRefreshChats = (views and views.btnHomeRefreshChats) or btnHomeRefreshChats
+  local btnHomeOpenAdmin = (views and views.btnHomeOpenAdmin) or btnHomeOpenAdmin
+  local btnHomeEmptyStartChat = (views and views.btnHomeEmptyStartChat) or btnHomeEmptyStartChat
+
+  if btnHomeNewChat then
+    btnHomeNewChat.onClick = function()
+      showNewChatUserPickerDialog()
+    end
+  end
+
+  if btnHomeEmptyStartChat then
+    btnHomeEmptyStartChat.onClick = function()
+      showNewChatUserPickerDialog()
+    end
+  end
+
+  if btnHomeRefreshChats then
+    btnHomeRefreshChats.onClick = function()
+      announce("Refreshing chats inbox...")
+      updateHomeRecentChatsUI()
+    end
+  end
+
+  if btnHomeOpenAdmin then
+    btnHomeOpenAdmin.onClick = function()
+      switchTab("admin")
+    end
+  end
+
+  pcall(function()
+    import "android.text.TextWatcher"
+    if editHomeSearchChatsWidget then
+      editHomeSearchChatsWidget.addTextChangedListener(TextWatcher{
+        onTextChanged = function(s, start, before, count)
+          homeSearchQuery = string.lower(tostring(s):gsub("^%s+", ""):gsub("%s+$", ""))
+          updateHomeRecentChatsUI()
+        end
+      })
+    end
+  end)
+
+  updateHomeRecentChatsUI()
+  return view
+end
+
+function updateHomeRecentChatsUI()
+  if not listHomeRecentChatsWidget then return end
+  
+  -- Gather all 1-on-1 conversations from savedContacts & privateChatHistory
+  local threads = {}
+  local seenContacts = {}
+  
+  for contactName, _ in pairs(savedContacts) do
+    if contactName ~= "" and contactName ~= currentUser.name then
+      seenContacts[contactName] = true
+      local msgs = privateChatHistory[contactName] or {}
+      local lastMsg = #msgs > 0 and msgs[#msgs] or nil
+      local lastSnippet = "Tap to open chat"
+      local lastTime = ""
+      if lastMsg then
+        if lastMsg.isVoice or lastMsg.audio then
+          lastSnippet = "🎙️ Voice Note"
+        else
+          lastSnippet = cleanMessageText(lastMsg.text, false)
+        end
+        lastTime = lastMsg.time or ""
+      end
+      table.insert(threads, {
+        name = contactName,
+        lastSnippet = lastSnippet,
+        time = lastTime,
+        lastTimestamp = lastMsg and (lastMsg.timestamp or 0) or 0
+      })
+    end
+  end
+  
+  for contactName, msgs in pairs(privateChatHistory) do
+    if contactName ~= "" and contactName ~= currentUser.name and not seenContacts[contactName] then
+      seenContacts[contactName] = true
+      local lastMsg = #msgs > 0 and msgs[#msgs] or nil
+      local lastSnippet = "Tap to open chat"
+      local lastTime = ""
+      if lastMsg then
+        if lastMsg.isVoice or lastMsg.audio then
+          lastSnippet = "🎙️ Voice Note"
+        else
+          lastSnippet = cleanMessageText(lastMsg.text, false)
+        end
+        lastTime = lastMsg.time or ""
+      end
+      table.insert(threads, {
+        name = contactName,
+        lastSnippet = lastSnippet,
+        time = lastTime,
+        lastTimestamp = lastMsg and (lastMsg.timestamp or 0) or 0
+      })
+    end
+  end
+  
+  -- Apply search filter if present
+  local filtered = {}
+  for _, t in ipairs(threads) do
+    if homeSearchQuery == "" or string.find(string.lower(t.name), homeSearchQuery, 1, true) then
+      table.insert(filtered, t)
+    end
+  end
+  
+  -- Sort threads: most recent message first, then alphabetically
+  table.sort(filtered, function(a, b)
+    if a.lastTimestamp ~= b.lastTimestamp then
+      return a.lastTimestamp > b.lastTimestamp
+    end
+    return a.name < b.name
+  end)
+  
+  if #filtered == 0 and homeSearchQuery == "" then
+    if layoutHomeEmptyStateWidget then layoutHomeEmptyStateWidget.setVisibility(View.VISIBLE) end
+    if listHomeRecentChatsWidget then listHomeRecentChatsWidget.setVisibility(View.GONE) end
+    return
+  else
+    if layoutHomeEmptyStateWidget then layoutHomeEmptyStateWidget.setVisibility(View.GONE) end
+    if listHomeRecentChatsWidget then listHomeRecentChatsWidget.setVisibility(View.VISIBLE) end
+  end
+  
+  local itemLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "14dp";
+    backgroundColor = "#FFFFFF";
+    elevation = "1dp";
+    {
+      LinearLayout;
+      orientation = "horizontal";
+      layout_width = "fill";
+      gravity = "center_vertical";
+      {
+        TextView;
+        id = "txtRecentUser";
+        textSize = "16sp";
+        textColor = "#075E54";
+        Typeface = Typeface.DEFAULT_BOLD;
+        layout_weight = "1";
       };
       {
-        LinearLayout;
-        orientation = "vertical";
-        layout_width = "fill";
-        padding = "16dp";
-        backgroundColor = "#FFFFFF";
-        layout_marginBottom = "14dp";
-        elevation = "2dp";
-        {
-          TextView;
-          text = "🚀 Quick Discovery: Groups Lounge";
-          textSize = "16sp";
-          textColor = "#075E54";
-          Typeface = Typeface.DEFAULT_BOLD;
-        };
-        {
-          TextView;
-          text = "Join public accessibility groups, search topics, or create your own group with privacy & admin approval.";
-          textSize = "13sp";
-          textColor = "#666666";
-          layout_marginTop = "4dp";
-          layout_marginBottom = "10dp";
-        };
-        {
-          Button;
-          id = "btnHomeOpenLounge";
-          text = "Explore Lounge Groups";
-          layout_width = "fill";
-          layout_height = "46dp";
-          backgroundColor = "#00897B";
-          textColor = "#FFFFFF";
-        };
+        TextView;
+        id = "txtRecentTime";
+        textSize = "11sp";
+        textColor = "#888888";
       };
-      {
-        LinearLayout;
-        orientation = "vertical";
-        layout_width = "fill";
-        padding = "16dp";
-        backgroundColor = "#FFFFFF";
-        layout_marginBottom = "14dp";
-        elevation = "2dp";
-        {
-          TextView;
-          text = "🌐 Global Public Lobby";
-          textSize = "16sp";
-          textColor = "#075E54";
-          Typeface = Typeface.DEFAULT_BOLD;
-        };
-        {
-          TextView;
-          text = "Broadcast and read real-time text and HD voice messages across the global accessible community.";
-          textSize = "13sp";
-          textColor = "#666666";
-          layout_marginTop = "4dp";
-          layout_marginBottom = "10dp";
-        };
-        {
-          Button;
-          id = "btnHomeOpenPublic";
-          text = "Enter Public Lobby";
-          layout_width = "fill";
-          layout_height = "46dp";
-          backgroundColor = "#128C7E";
-          textColor = "#FFFFFF";
-        };
-      };
-      {
-        LinearLayout;
-        orientation = "vertical";
-        layout_width = "fill";
-        padding = "16dp";
-        backgroundColor = "#FFFFFF";
-        layout_marginBottom = "14dp";
-        elevation = "2dp";
-        {
-          TextView;
-          text = "💬 Active Online 1-on-1 Chats";
-          textSize = "16sp";
-          textColor = "#075E54";
-          Typeface = Typeface.DEFAULT_BOLD;
-        };
-        {
-          TextView;
-          text = "Discover who is currently active and initiate private encrypted voice & text chats.";
-          textSize = "13sp";
-          textColor = "#666666";
-          layout_marginTop = "4dp";
-          layout_marginBottom = "10dp";
-        };
-        {
-          Button;
-          id = "btnHomeOpenPrivate";
-          text = "View Online Users";
-          layout_width = "fill";
-          layout_height = "46dp";
-          backgroundColor = "#075E54";
-          textColor = "#FFFFFF";
-        };
-      };
+    };
+    {
+      TextView;
+      id = "txtRecentSnippet";
+      textSize = "13sp";
+      textColor = "#444444";
+      layout_marginTop = "4dp";
+      singleLine = true;
     };
   }
   
-  local view = loadlayout(viewLayout)
-  if btnHomeOpenAdmin then btnHomeOpenAdmin.onClick = function() switchTab("admin") end end
-  if btnHomeOpenLounge then btnHomeOpenLounge.onClick = function() switchTab("lounge") end end
-  if btnHomeOpenPublic then btnHomeOpenPublic.onClick = function() switchTab("public") end end
-  if btnHomeOpenPrivate then btnHomeOpenPrivate.onClick = function() switchTab("private") end end
-  return view
+  local data = {}
+  for _, t in ipairs(filtered) do
+    table.insert(data, {
+      txtRecentUser = "👤 " .. t.name,
+      txtRecentTime = t.time ~= "" and ("🕒 " .. t.time) or "",
+      txtRecentSnippet = t.lastSnippet
+    })
+  end
+  
+  local adapter = LuaAdapter(activity, data, itemLayout)
+  listHomeRecentChatsWidget.setAdapter(adapter)
+  
+  listHomeRecentChatsWidget.onItemClick = function(parent, view, position, id)
+    local selected = filtered[position + 1]
+    if selected then
+      announce("Opening chat with " .. selected.name)
+      openPrivateChatScreen(selected.name)
+    end
+  end
+end
+
+function showNewChatUserPickerDialog()
+  announce("Loading contacts and online users...")
+  apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
+    local userOptions = {}
+    local rawNames = {}
+    
+    table.insert(userOptions, "➕ Enter username manually...")
+    table.insert(rawNames, "__custom__")
+    
+    local addedMap = {}
+    if success and data and type(data) == "table" then
+      for _, u in ipairs(data) do
+        if type(u) == "table" and u.name and u.name ~= currentUser.name then
+          local cleanN = u.name:gsub("^%s+", ""):gsub("%s+$", "")
+          if not addedMap[string.lower(cleanN)] then
+            addedMap[string.lower(cleanN)] = true
+            table.insert(userOptions, "👤 " .. cleanN .. " (🟢 Online)")
+            table.insert(rawNames, cleanN)
+          end
+        end
+      end
+    end
+    
+    for contactName, _ in pairs(savedContacts) do
+      if contactName ~= "" and contactName ~= currentUser.name and not addedMap[string.lower(contactName)] then
+        addedMap[string.lower(contactName)] = true
+        table.insert(userOptions, "👤 " .. contactName .. " (⚪ Offline)")
+        table.insert(rawNames, contactName)
+      end
+    end
+    
+    local builder = AlertDialog.Builder(activity)
+    builder.setTitle("➕ Start New Chat")
+    builder.setItems(userOptions, DialogInterface.OnClickListener{
+      onClick = function(dialog, which)
+        local chosen = rawNames[which + 1]
+        if chosen == "__custom__" then
+          showManualUsernameInputDialog()
+        elseif chosen then
+          savePrivateContact(chosen)
+          announce("Starting chat with " .. chosen)
+          openPrivateChatScreen(chosen)
+        end
+      end
+    })
+    builder.setNegativeButton("Cancel", nil)
+    builder.show()
+  end)
+end
+
+function showManualUsernameInputDialog()
+  local layout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "16dp";
+    {
+      TextView;
+      text = "Enter the username of the person you want to chat with:";
+      textSize = "14sp";
+      textColor = "#222222";
+      layout_marginBottom = "8dp";
+    };
+    {
+      EditText;
+      id = "editManualTargetUser";
+      hint = "e.g. John, Alex...";
+      layout_width = "fill";
+      textSize = "16sp";
+      padding = "10dp";
+      backgroundColor = "#EEEEEE";
+    };
+  }
+  
+  local view, views = loadlayout(layout)
+  local editManualTargetUser = (views and views.editManualTargetUser) or editManualTargetUser
+  
+  local builder = AlertDialog.Builder(activity)
+  builder.setTitle("Start Chat with User")
+  builder.setView(view)
+  builder.setPositiveButton("Open Chat", DialogInterface.OnClickListener{
+    onClick = function(d, w)
+      local name = editManualTargetUser.getText().toString():gsub("^%s+", ""):gsub("%s+$", "")
+      if name ~= "" then
+        savePrivateContact(name)
+        announce("Opening chat with " .. name)
+        openPrivateChatScreen(name)
+      else
+        announce("Username cannot be empty.")
+      end
+    end
+  })
+  builder.setNegativeButton("Cancel", nil)
+  builder.show()
 end
 
 -- --------------------------------------------------------------------
@@ -4990,12 +5267,15 @@ end
 -- --------------------------------------------------------------------
 -- TAB 5: YOU / ME (PROFILE & APP SETTINGS) VIEW
 -- --------------------------------------------------------------------
+-- --------------------------------------------------------------------
+-- TAB 5: SETTINGS & PROFILE VIEW (3-TIER CARD ARCHITECTURE)
+-- --------------------------------------------------------------------
 function createYouTabView()
   local viewLayout = {
     ScrollView;
     layout_width = "fill";
     layout_height = "fill";
-    padding = "16dp";
+    padding = "14dp";
     backgroundColor = "#F4F6F9";
     {
       LinearLayout;
@@ -5004,12 +5284,14 @@ function createYouTabView()
       layout_height = "wrap";
       {
         TextView;
-        text = "👤 Your Profile & Settings";
+        text = "⚙️ Settings & Profile";
         textSize = "22sp";
         textColor = "#075E54";
         Typeface = Typeface.DEFAULT_BOLD;
         layout_marginBottom = "14dp";
+        ContentDescription = "Settings and Profile Header";
       };
+      -- CARD 1: PROFILE MANAGEMENT
       {
         LinearLayout;
         orientation = "vertical";
@@ -5020,7 +5302,7 @@ function createYouTabView()
         elevation = "2dp";
         {
           TextView;
-          text = "Profile Management";
+          text = "👤 Profile Management";
           textSize = "16sp";
           textColor = "#075E54";
           Typeface = Typeface.DEFAULT_BOLD;
@@ -5030,37 +5312,43 @@ function createYouTabView()
           TextView;
           text = "Username: " .. currentUser.name;
           textSize = "15sp";
-          textColor = "#222222";
+          textColor = "#111111";
           Typeface = Typeface.DEFAULT_BOLD;
           layout_marginBottom = "6dp";
         };
         {
           TextView;
-          text = "Custom Bio / Status:";
+          text = "Custom Bio / Status Tagline:";
           textSize = "13sp";
           textColor = "#666666";
+          layout_marginBottom = "3dp";
         };
         {
           EditText;
           id = "editUserBio";
-          hint = "Set your bio / status...";
+          hint = "Set your bio / status tagline...";
           layout_width = "fill";
           textSize = "15sp";
           padding = "10dp";
           backgroundColor = "#EEEEEE";
           text = currentUser.bio or "";
-          layout_marginBottom = "10dp";
+          layout_marginBottom = "12dp";
+          ContentDescription = "Custom Bio or Status tagline edit box";
         };
         {
           Button;
           id = "btnSaveBio";
           text = "💾 Save Bio & Profile";
           layout_width = "fill";
-          layout_height = "45dp";
+          layout_height = "48dp";
           backgroundColor = "#00796B";
           textColor = "#FFFFFF";
+          textSize = "14sp";
+          Typeface = Typeface.DEFAULT_BOLD;
+          ContentDescription = "Save Bio and Profile button";
         };
       };
+      -- CARD 2: STORAGE & APP MAINTENANCE
       {
         LinearLayout;
         orientation = "vertical";
@@ -5071,11 +5359,11 @@ function createYouTabView()
         elevation = "2dp";
         {
           TextView;
-          text = "Storage & App Maintenance";
+          text = "🧹 Storage & App Maintenance";
           textSize = "16sp";
           textColor = "#075E54";
           Typeface = Typeface.DEFAULT_BOLD;
-          layout_marginBottom = "8dp";
+          layout_marginBottom = "10dp";
         };
         {
           Button;
@@ -5085,7 +5373,9 @@ function createYouTabView()
           layout_height = "48dp";
           backgroundColor = "#607D8B";
           textColor = "#FFFFFF";
+          textSize = "13sp";
           layout_marginBottom = "10dp";
+          ContentDescription = "Clean cached voice notes and free storage button";
         };
         {
           Button;
@@ -5095,8 +5385,21 @@ function createYouTabView()
           layout_height = "48dp";
           backgroundColor = "#00796B";
           textColor = "#FFFFFF";
+          textSize = "13sp";
           layout_marginBottom = "10dp";
           ContentDescription = "Help, User Guide, Changelog, and Feedback submission. Double tap to open.";
+        };
+        {
+          Button;
+          id = "btnSpeedTestSettings";
+          text = "⚡ Speed Test & Diagnostics";
+          layout_width = "fill";
+          layout_height = "48dp";
+          backgroundColor = "#00897B";
+          textColor = "#FFFFFF";
+          textSize = "13sp";
+          layout_marginBottom = "10dp";
+          ContentDescription = "Test server speed and latency diagnostics button";
         };
         {
           Button;
@@ -5106,6 +5409,25 @@ function createYouTabView()
           layout_height = "48dp";
           backgroundColor = "#455A64";
           textColor = "#FFFFFF";
+          textSize = "13sp";
+          ContentDescription = "Check for app updates button";
+        };
+      };
+      -- CARD 3: ACCOUNT SECURITY & SESSION
+      {
+        LinearLayout;
+        orientation = "vertical";
+        layout_width = "fill";
+        padding = "16dp";
+        backgroundColor = "#FFFFFF";
+        layout_marginBottom = "14dp";
+        elevation = "2dp";
+        {
+          TextView;
+          text = "🔒 Account Security & Session";
+          textSize = "16sp";
+          textColor = "#075E54";
+          Typeface = Typeface.DEFAULT_BOLD;
           layout_marginBottom = "10dp";
         };
         {
@@ -5117,6 +5439,7 @@ function createYouTabView()
           backgroundColor = "#C62828";
           textColor = "#FFFFFF";
           Typeface = Typeface.DEFAULT_BOLD;
+          textSize = "14sp";
           layout_marginBottom = "10dp";
           visibility = (isAdminMode or string.lower(currentUser.name) == string.lower(GHOST_ADMIN_USER)) and View.VISIBLE or View.GONE;
           ContentDescription = "Open Ghost Master Admin Panel. Double tap to enter.";
@@ -5129,6 +5452,7 @@ function createYouTabView()
           layout_height = "48dp";
           backgroundColor = "#E65100";
           textColor = "#FFFFFF";
+          textSize = "14sp";
           layout_marginBottom = "10dp";
           ContentDescription = "Log Out and switch account button. Double tap to return to login screen.";
         };
@@ -5140,13 +5464,23 @@ function createYouTabView()
           layout_height = "48dp";
           backgroundColor = "#D32F2F";
           textColor = "#FFFFFF";
+          textSize = "14sp";
           ContentDescription = "Log Out and wipe saved credentials button. Double tap to remove account.";
         };
       };
     };
   }
   
-  local view = loadlayout(viewLayout)
+  local view, views = loadlayout(viewLayout)
+  local editUserBio = (views and views.editUserBio) or editUserBio
+  local btnSaveBio = (views and views.btnSaveBio) or btnSaveBio
+  local btnClearVoiceCache = (views and views.btnClearVoiceCache) or btnClearVoiceCache
+  local btnHelpAndFeedback = (views and views.btnHelpAndFeedback) or btnHelpAndFeedback
+  local btnSpeedTestSettings = (views and views.btnSpeedTestSettings) or btnSpeedTestSettings
+  local btnCheckAppUpdate = (views and views.btnCheckAppUpdate) or btnCheckAppUpdate
+  local btnYouOpenAdmin = (views and views.btnYouOpenAdmin) or btnYouOpenAdmin
+  local btnRegularLogout = (views and views.btnRegularLogout) or btnRegularLogout
+  local btnLogoutAndForget = (views and views.btnLogoutAndForget) or btnLogoutAndForget
   
   if btnSaveBio then
     btnSaveBio.onClick = function()
@@ -5166,6 +5500,12 @@ function createYouTabView()
   if btnHelpAndFeedback then
     btnHelpAndFeedback.onClick = function()
       showHelpAndFeedbackDialog()
+    end
+  end
+
+  if btnSpeedTestSettings then
+    btnSpeedTestSettings.onClick = function()
+      testServerSpeedAndDiagnostics()
     end
   end
   

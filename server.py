@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.6.0",
-                "version_code": 54,
+                "version": "3.7.0",
+                "version_code": 55,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.6.0: Live Voice Calling (Public Voice Stage, Lounge Group Calls, 1-on-1 Private Calls) with Adaptive Voice Quality Engine."
+                "changelog": "Version 3.7.0: Comprehensive UI/UX Redesign - Dynamic Recent Chats Inbox on Home with 'New Chat' action button, and structured 3-tier card layout in Settings (Profile, Maintenance, and Security)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
