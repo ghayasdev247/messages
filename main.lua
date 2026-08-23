@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.11.0"
-local APP_VERSION_CODE = 65
+local APP_VERSION = "3.11.1"
+local APP_VERSION_CODE = 66
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2096,6 +2096,7 @@ function leaveActiveVoiceCall()
   isCallActive = false
   isCallChunkTransmitting = false
   
+  -- 1. Stop any active recording immediately
   pcall(function()
     if activeCallRecorder then
       activeCallRecorder.stop()
@@ -2104,29 +2105,54 @@ function leaveActiveVoiceCall()
     end
   end)
   
-  local leavePayload = encodeJSON({
-    roomId = activeCallRoomId,
-    username = currentUser.name
-  })
-  Http.post(BACKEND_URL .. "/api/call/leave", leavePayload, function() end)
+  -- 2. CRITICAL: Reset AudioManager to NORMAL mode FIRST
+  -- This MUST happen before dialog dismiss, otherwise screen reader stays muted
+  resetAudioToNormalMode()
   
-  if activeCallType == "private" and activeChatTarget and activeChatTarget ~= "" then
-    local endPayload = encodeJSON({
-      action = "end",
-      from = currentUser.name,
-      to = activeChatTarget,
-      roomId = activeCallRoomId
+  -- 3. Send leave notification (non-blocking, fire-and-forget)
+  pcall(function()
+    local leavePayload = encodeJSON({
+      roomId = activeCallRoomId,
+      username = currentUser.name
     })
-    Http.post(BACKEND_URL .. "/api/call/signal", endPayload, function() end)
+    Http.post(BACKEND_URL .. "/api/call/leave", leavePayload, function() end)
+  end)
+  
+  -- 4. Send end signal for private calls
+  if activeCallType == "private" and activeChatTarget and activeChatTarget ~= "" then
+    pcall(function()
+      local endPayload = encodeJSON({
+        action = "end",
+        from = currentUser.name,
+        to = activeChatTarget,
+        roomId = activeCallRoomId
+      })
+      Http.post(BACKEND_URL .. "/api/call/signal", endPayload, function() end)
+    end)
   end
   
-  if activeCallDialog and activeCallDialog.isShowing() then
-    pcall(function() activeCallDialog.dismiss() end)
-    activeCallDialog = nil
+  -- 5. Dismiss dialog safely on the UI thread with a small delay
+  -- so screen reader processes the audio mode reset first
+  local dialogRef = activeCallDialog
+  activeCallDialog = nil
+  if dialogRef then
+    Handler().postDelayed(Runnable{
+      run = function()
+        pcall(function()
+          if dialogRef.isShowing() then
+            dialogRef.dismiss()
+          end
+        end)
+      end
+    }, 200)
   end
   
-  setCallSpeakerRoute(false)
-  announce("Voice call disconnected. Audio session closed.")
+  -- 6. Announce AFTER audio mode is restored
+  Handler().postDelayed(Runnable{
+    run = function()
+      announce("Call ended.")
+    end
+  }, 400)
 end
 
 function setCallSpeakerRoute(isSpeaker)
@@ -2137,6 +2163,18 @@ function setCallSpeakerRoute(isSpeaker)
     if am then
       am.setMode(AudioManager.MODE_IN_COMMUNICATION)
       am.setSpeakerphoneOn(isSpeaker)
+    end
+  end)
+end
+
+function resetAudioToNormalMode()
+  pcall(function()
+    import "android.media.AudioManager"
+    import "android.content.Context"
+    local am = activity.getSystemService(Context.AUDIO_SERVICE)
+    if am then
+      am.setSpeakerphoneOn(false)
+      am.setMode(AudioManager.MODE_NORMAL)
     end
   end)
 end
@@ -2406,26 +2444,52 @@ function startLiveCallLoops()
   pollLiveCallRoomStatus()
 end
 
+local lastChunkTransmitStartTime = 0
+
 function transmitLiveAudioBurst()
-  if not isCallActive or isCallMicMuted or isCallChunkTransmitting then
+  if not isCallActive then return end
+  
+  -- Deadlock recovery: if transmitting flag stuck for >8 seconds, force reset
+  if isCallChunkTransmitting then
+    local elapsed = os.time() - lastChunkTransmitStartTime
+    if elapsed > 8 then
+      isCallChunkTransmitting = false
+    else
+      if isCallActive then
+        Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 400)
+      end
+      return
+    end
+  end
+  
+  if isCallMicMuted then
     if isCallActive then
-      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 400)
+      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 500)
     end
     return
   end
   
   isCallChunkTransmitting = true
-  import "android.media.MediaRecorder"
-  local chunkFile = getAppAudioDir() .. "/call_burst_" .. os.time() .. ".3gp"
+  lastChunkTransmitStartTime = os.time()
+  
+  local chunkFile = getAppAudioDir() .. "/call_burst_" .. os.time() .. "_" .. math.random(1000, 9999) .. ".3gp"
   
   local recOk = pcall(function()
+    import "android.media.MediaRecorder"
     activeCallRecorder = MediaRecorder()
     activeCallRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
     activeCallRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-    pcall(function()
+    -- Try AMR_WB first, fall back to AMR_NB
+    local encOk = pcall(function()
       activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_WB)
       activeCallRecorder.setAudioSamplingRate(16000)
     end)
+    if not encOk then
+      pcall(function()
+        activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+        activeCallRecorder.setAudioSamplingRate(8000)
+      end)
+    end
     activeCallRecorder.setOutputFile(chunkFile)
     activeCallRecorder.prepare()
     activeCallRecorder.start()
@@ -2434,6 +2498,11 @@ function transmitLiveAudioBurst()
   if recOk then
     Handler().postDelayed(Runnable{
       run = function()
+        if not isCallActive then
+          isCallChunkTransmitting = false
+          return
+        end
+        
         pcall(function()
           if activeCallRecorder then
             activeCallRecorder.stop()
@@ -2452,12 +2521,28 @@ function transmitLiveAudioBurst()
             audio = b64,
             quality = "HD"
           })
+          
+          -- Safety timeout: if HTTP callback never fires, force unlock after 6 seconds
+          local httpDone = false
           Http.post(BACKEND_URL .. "/api/call/audio", pkt, function(c, r)
+            httpDone = true
             isCallChunkTransmitting = false
             if isCallActive then
               Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 100)
             end
           end)
+          
+          -- Watchdog: unlock after 6 seconds if HTTP callback never fired
+          Handler().postDelayed(Runnable{
+            run = function()
+              if not httpDone and isCallChunkTransmitting then
+                isCallChunkTransmitting = false
+                if isCallActive then
+                  Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 200)
+                end
+              end
+            end
+          }, 6000)
         else
           isCallChunkTransmitting = false
           if isCallActive then
@@ -2467,9 +2552,16 @@ function transmitLiveAudioBurst()
       end
     }, 700)
   else
+    -- Recording failed entirely — retry after delay
     isCallChunkTransmitting = false
+    pcall(function()
+      if activeCallRecorder then
+        pcall(function() activeCallRecorder.release() end)
+        activeCallRecorder = nil
+      end
+    end)
     if isCallActive then
-      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 700)
+      Handler().postDelayed(Runnable{ run = transmitLiveAudioBurst }, 1000)
     end
   end
 end
@@ -2477,60 +2569,82 @@ end
 function pollLiveCallRoomStatus()
   if not isCallActive then return end
   
-  -- 1. Fetch Room Status & Incoming Audio Packets
-  Http.get(BACKEND_URL .. "/api/call/status?room=" .. activeCallRoomId .. "&t=" .. os.time(), function(code, content)
-    if isCallActive and code == 200 and content and content ~= "null" then
-      local data = decodeJSON(content)
-      if data and type(data) == "table" then
-        if type(data.participants) == "table" then
-          callParticipants = data.participants
-          if #callParticipants > 1 then
-            activeCallRecipientAccepted = true
-          end
-          updateCallParticipantsList()
-        end
-        
-        local latestAudio = data.latest_audio
-        if latestAudio and type(latestAudio) == "table" then
-          local seq = tonumber(latestAudio.seq or 0) or 0
-          local sender = latestAudio.sender or ""
-          -- Strict Echo Prevention: ONLY play if sender is NOT me!
-          if seq > lastPlayedAudioSeq and not isSenderMe(sender) and latestAudio.audio and #latestAudio.audio > 20 then
-            lastPlayedAudioSeq = seq
-            playIncomingCallBurst(latestAudio.audio, sender)
-          end
-        end
-      end
+  local pollDone = false
+  
+  local function scheduleNextPoll()
+    if pollDone then return end
+    pollDone = true
+    if isCallActive then
+      Handler().postDelayed(Runnable{ run = pollLiveCallRoomStatus }, 800)
     end
-    
-    -- 2. If 1-on-1 Call, poll for accept/decline/end signals
-    if isCallActive and activeCallType == "private" then
-      Http.get(BACKEND_URL .. "/api/call/signal?user=" .. currentUser.name .. "&t=" .. os.time(), function(sigCode, sigContent)
-        if isCallActive and sigCode == 200 and sigContent and sigContent ~= "null" then
-          local sigRes = decodeJSON(sigContent)
-          if sigRes and sigRes.signal and type(sigRes.signal) == "table" then
-            local act = sigRes.signal.action
-            if act == "accept" and not activeCallRecipientAccepted then
-              activeCallRecipientAccepted = true
-              updateCallParticipantsList()
-              announce("Call connected with " .. (activeChatTarget or "User"))
-            elseif act == "decline" then
-              announce("Call was declined by " .. (activeChatTarget or "User"))
-              leaveActiveVoiceCall()
-              return
-            elseif act == "end" then
-              announce("Call ended by " .. (activeChatTarget or "User"))
-              leaveActiveVoiceCall()
-              return
+  end
+  
+  -- Watchdog: if Http.get never fires its callback, reschedule anyway after 5 seconds
+  Handler().postDelayed(Runnable{
+    run = function()
+      scheduleNextPoll()
+    end
+  }, 5000)
+  
+  -- Fetch Room Status & Incoming Audio Packets
+  pcall(function()
+    Http.get(BACKEND_URL .. "/api/call/status?room=" .. activeCallRoomId .. "&t=" .. os.time(), function(code, content)
+      pcall(function()
+        if isCallActive and code == 200 and content and content ~= "null" then
+          local data = decodeJSON(content)
+          if data and type(data) == "table" then
+            if type(data.participants) == "table" then
+              callParticipants = data.participants
+              if #callParticipants > 1 then
+                activeCallRecipientAccepted = true
+              end
+              pcall(function() updateCallParticipantsList() end)
+            end
+            
+            local latestAudio = data.latest_audio
+            if latestAudio and type(latestAudio) == "table" then
+              local seq = tonumber(latestAudio.seq or 0) or 0
+              local sender = latestAudio.sender or ""
+              if seq > lastPlayedAudioSeq and not isSenderMe(sender) and latestAudio.audio and #latestAudio.audio > 20 then
+                lastPlayedAudioSeq = seq
+                pcall(function() playIncomingCallBurst(latestAudio.audio, sender) end)
+              end
             end
           end
         end
       end)
-    end
-    
-    if isCallActive then
-      Handler().postDelayed(Runnable{ run = pollLiveCallRoomStatus }, 700)
-    end
+      
+      -- Check private call signals
+      if isCallActive and activeCallType == "private" then
+        pcall(function()
+          Http.get(BACKEND_URL .. "/api/call/signal?user=" .. currentUser.name .. "&t=" .. os.time(), function(sigCode, sigContent)
+            pcall(function()
+              if isCallActive and sigCode == 200 and sigContent and sigContent ~= "null" then
+                local sigRes = decodeJSON(sigContent)
+                if sigRes and sigRes.signal and type(sigRes.signal) == "table" then
+                  local act = sigRes.signal.action
+                  if act == "accept" and not activeCallRecipientAccepted then
+                    activeCallRecipientAccepted = true
+                    pcall(function() updateCallParticipantsList() end)
+                    announce("Call connected with " .. (activeChatTarget or "User"))
+                  elseif act == "decline" then
+                    announce("Call was declined by " .. (activeChatTarget or "User"))
+                    leaveActiveVoiceCall()
+                    return
+                  elseif act == "end" then
+                    announce("Call ended by " .. (activeChatTarget or "User"))
+                    leaveActiveVoiceCall()
+                    return
+                  end
+                end
+              end
+            end)
+          end)
+        end)
+      end
+      
+      scheduleNextPoll()
+    end)
   end)
 end
 

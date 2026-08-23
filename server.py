@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.11.0",
-                "version_code": 65,
+                "version": "3.11.1",
+                "version_code": 66,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.11.0: Instant Zero-Lag Call Initialization, 1.5s High-Speed Incoming Call Signaling, and Echo-Free Real-Time Audio Streaming."
+                "changelog": "Version 3.11.1: Critical fix for screen reader freeze after call end, audio deadlock recovery watchdog, crash-proof polling loops."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
