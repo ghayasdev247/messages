@@ -426,6 +426,41 @@ function clearSavedCredentials()
 end
 
 -- --------------------------------------------------------------------
+-- SAVED PRIVATE CONTACTS ENGINE
+-- --------------------------------------------------------------------
+function savePrivateContact(username)
+  if not username or username == "" or (currentUser and string.lower(username) == string.lower(currentUser.name or "")) then return end
+  local clean = username:gsub("^%s+", ""):gsub("%s+$", "")
+  local contacts = loadPrivateContacts()
+  contacts[clean] = os.time()
+  pcall(function()
+    local path = getAppAudioDir() .. "/private_contacts.json"
+    local f = io.open(path, "w")
+    if f then
+      f:write(encodeJSON(contacts))
+      f:close()
+    end
+  end)
+end
+
+function loadPrivateContacts()
+  local path = getAppAudioDir() .. "/private_contacts.json"
+  local res = {}
+  pcall(function()
+    local f = io.open(path, "r")
+    if f then
+      local data = f:read("*a")
+      f:close()
+      if data and data ~= "" then
+        local dec = decodeJSON(data)
+        if type(dec) == "table" then res = dec end
+      end
+    end
+  end)
+  return res
+end
+
+-- --------------------------------------------------------------------
 -- EPHEMERAL STORAGE CLEANUP ENGINE
 -- --------------------------------------------------------------------
 function purgeEphemeralAudioFiles()
@@ -437,7 +472,7 @@ function purgeEphemeralAudioFiles()
       if files then
         for i = 0, #files - 1 do
           local name = files[i].getName()
-          if name ~= "saved_account.json" then
+          if name ~= "saved_account.json" and name ~= "private_contacts.json" then
             files[i].delete()
           end
         end
@@ -4660,38 +4695,6 @@ end
 -- --------------------------------------------------------------------
 -- TAB 4: PRIVATE LOBBY VIEW (ACCESSIBLE VERTICAL LISTVIEW)
 -- --------------------------------------------------------------------
-function savePrivateContact(username)
-  if not username or username == "" or string.lower(username) == string.lower(currentUser.name) then return end
-  local clean = username:gsub("^%s+", ""):gsub("%s+$", "")
-  local contacts = loadPrivateContacts()
-  contacts[clean] = os.time()
-  pcall(function()
-    local path = getAppAudioDir() .. "/private_contacts.json"
-    local f = io.open(path, "w")
-    if f then
-      f:write(encodeJSON(contacts))
-      f:close()
-    end
-  end)
-end
-
-function loadPrivateContacts()
-  local path = getAppAudioDir() .. "/private_contacts.json"
-  local res = {}
-  pcall(function()
-    local f = io.open(path, "r")
-    if f then
-      local data = f:read("*a")
-      f:close()
-      if data and data ~= "" then
-        local dec = decodeJSON(data)
-        if type(dec) == "table" then res = dec end
-      end
-    end
-  end)
-  return res
-end
-
 function showNewChatDialog()
   announce("Loading registered users directory for new chat...")
   local now_ts = os.time()
