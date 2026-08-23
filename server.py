@@ -242,8 +242,8 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.11.1",
-                "version_code": 66,
+                "version": "3.11.2",
+                "version_code": 67,
                 "download_url": "/api/download-lua",
                 "changelog": "Version 3.11.1: Critical fix for screen reader freeze after call end, audio deadlock recovery watchdog, crash-proof polling loops."
             }

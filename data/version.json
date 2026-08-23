@@ -1,7 +1,7 @@
 {
-  "version": "3.11.1",
-  "version_code": 66,
+  "version": "3.11.2",
+  "version_code": 67,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.11.1: Critical fix for screen reader freeze after call end (AudioManager MODE_NORMAL reset), audio deadlock recovery watchdog, crash-proof polling loops."
+  "changelog": "Version 3.11.2: Diagnostic voice call debugging - announces exactly what fails (microphone, server, dialog). AudioManager MODE_NORMAL fix for screen reader."
 }

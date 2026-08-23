@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.11.1"
-local APP_VERSION_CODE = 66
+local APP_VERSION = "3.11.2"
+local APP_VERSION_CODE = 67
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2069,26 +2069,63 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
   isCallMicMuted = false
   isCallSpeakerOn = true
   callDurationTimer = 0
-  lastPlayedAudioSeq = (os.time() * 1000) -- Ignore any prior audio packets
+  lastPlayedAudioSeq = (os.time() * 1000)
   isCallChunkTransmitting = false
   activeCallRecipientAccepted = (callType ~= "private")
   callParticipants = { { name = currentUser.name, isOnline = true } }
   
-  setCallSpeakerRoute(true)
-  announce(activeCallTitle .. " active.")
+  pcall(function() setCallSpeakerRoute(true) end)
+  callAudioDiagAnnounced = false
+  announce("Starting call, please wait.")
   
-  -- Open modal and start streaming IMMEDIATELY (0ms delay)
-  showLiveCallModal()
-  updateCallParticipantsList()
-  startLiveCallLoops()
+  -- Step 1: Open the call dialog
+  local modalOk, modalErr = pcall(function()
+    showLiveCallModal()
+  end)
+  if not modalOk then
+    announce("Error opening call screen: " .. tostring(modalErr))
+  end
   
-  local joinPayload = encodeJSON({
-    roomId = activeCallRoomId,
-    username = currentUser.name,
-    isMuted = false,
-    quality = "HD"
-  })
-  Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function() end)
+  -- Step 2: Update participants display
+  pcall(function() updateCallParticipantsList() end)
+  
+  -- Step 3: Start audio loops
+  local loopsOk, loopsErr = pcall(function()
+    startLiveCallLoops()
+  end)
+  if not loopsOk then
+    announce("Error starting audio engine: " .. tostring(loopsErr))
+  end
+  
+  -- Step 4: Notify server (non-blocking)
+  pcall(function()
+    local joinPayload = encodeJSON({
+      roomId = activeCallRoomId,
+      username = currentUser.name,
+      isMuted = false,
+      quality = "HD"
+    })
+    Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function(code, res)
+      if code == 200 then
+        announce("Call connected successfully.")
+      else
+        announce("Server returned code " .. tostring(code))
+      end
+    end)
+  end)
+  
+  -- Step 5: Announce connection after 3 seconds
+  Handler().postDelayed(Runnable{
+    run = function()
+      if isCallActive then
+        if activeCallType == "private" and not activeCallRecipientAccepted then
+          announce("Ringing " .. (activeChatTarget or "User") .. ". Waiting for answer.")
+        else
+          announce("You are live in the call. " .. #callParticipants .. " participants.")
+        end
+      end
+    end
+  }, 3000)
 end
 
 function leaveActiveVoiceCall()
@@ -2445,6 +2482,7 @@ function startLiveCallLoops()
 end
 
 local lastChunkTransmitStartTime = 0
+local callAudioDiagAnnounced = false
 
 function transmitLiveAudioBurst()
   if not isCallActive then return end
@@ -2496,6 +2534,10 @@ function transmitLiveAudioBurst()
   end)
   
   if recOk then
+    if not callAudioDiagAnnounced then
+      callAudioDiagAnnounced = true
+      announce("Microphone active, streaming audio.")
+    end
     Handler().postDelayed(Runnable{
       run = function()
         if not isCallActive then
@@ -2552,7 +2594,11 @@ function transmitLiveAudioBurst()
       end
     }, 700)
   else
-    -- Recording failed entirely — retry after delay
+    -- Recording failed entirely — announce once and retry
+    if not callAudioDiagAnnounced then
+      callAudioDiagAnnounced = true
+      announce("Microphone error. Check microphone permission.")
+    end
     isCallChunkTransmitting = false
     pcall(function()
       if activeCallRecorder then
