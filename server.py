@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.8.1",
-                "version_code": 59,
+                "version": "3.9.0",
+                "version_code": 60,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.8.1: Enhanced WebRTC Call Connection & Participant Sync (Eliminated hanging connecting status, added real-time active stage speaker status and 1-on-1 ringing detection)."
+                "changelog": "Version 3.9.0: Ultra-Low Bandwidth & Delta Sync Engine (On-demand voice streaming via Audio Vault, Delta queries with 30-message windowing, local disk cache, and ETag/304 HTTP caching)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

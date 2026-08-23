@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.8.1"
-local APP_VERSION_CODE = 59
+local APP_VERSION = "3.9.0"
+local APP_VERSION_CODE = 60
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -862,13 +862,91 @@ function postFirebaseData(path, payload, callback)
   end)
 end
 
+-- --------------------------------------------------------------------
+-- ⚡ ULTRA-LOW BANDWIDTH LOCAL CACHE & DELTA SYNC ENGINE
+-- --------------------------------------------------------------------
+function getLocalCachePath(key)
+  local safeKey = string.lower(tostring(key or "default")):gsub("[^%w_-]", "_")
+  return getAppDataDir() .. "/cache_" .. safeKey .. ".json"
+end
+
+function loadLocalCachedMessages(key)
+  local path = getLocalCachePath(key)
+  local f = File(path)
+  if f.exists() and f.length() > 0 then
+    local content = readFile(path)
+    if content and content ~= "" then
+      local data = decodeJSON(content)
+      if data and type(data) == "table" then
+        return data
+      end
+    end
+  end
+  return {}
+end
+
+function saveLocalCachedMessages(key, messages)
+  if not messages or type(messages) ~= "table" then return end
+  local path = getLocalCachePath(key)
+  local jsonStr = encodeJSON(messages)
+  if jsonStr and jsonStr ~= "" then
+    writeFile(path, jsonStr)
+  end
+end
+
 function apiGet(endpoint, githubFilePath, callback)
-  fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
-    if fbSuccess and fbData then
-      callback(true, fbData)
+  local cacheKey = githubFilePath or endpoint
+  local cached = loadLocalCachedMessages(cacheKey) or {}
+  local latestTs = 0
+  for _, m in ipairs(cached) do
+    if type(m) == "table" and m.timestamp then
+      local ts = tonumber(m.timestamp) or 0
+      if ts > latestTs then latestTs = ts end
+    end
+  end
+
+  local sep = string.find(endpoint, "%?") and "&" or "?"
+  local deltaUrl = BACKEND_URL .. endpoint .. sep .. "since_ts=" .. latestTs .. "&limit=30"
+
+  Http.get(deltaUrl, function(code, content)
+    if code == 200 and content and content ~= "null" then
+      local res = decodeJSON(content)
+      local newMsgs = {}
+      if res and type(res) == "table" then
+        if res.messages and type(res.messages) == "table" then
+          newMsgs = res.messages
+        elseif #res > 0 then
+          newMsgs = res
+        end
+      end
+
+      if #newMsgs > 0 then
+        for _, nm in ipairs(newMsgs) do
+          table.insert(cached, nm)
+        end
+        cached = deduplicateAndSortMessages(cached)
+        saveLocalCachedMessages(cacheKey, cached)
+        if callback then callback(true, cached, #newMsgs) end
+        return
+      end
+    end
+
+    -- Return cached messages if up to date or 304 Not Modified
+    if #cached > 0 then
+      if callback then callback(true, cached, 0) end
       return
     end
-    callback(false, {})
+
+    -- Fallback to Firebase full fetch if local cache is completely empty
+    fetchFirebaseData(githubFilePath, function(fbSuccess, fbData)
+      if fbSuccess and fbData then
+        local sorted = deduplicateAndSortMessages(fbData)
+        saveLocalCachedMessages(cacheKey, sorted)
+        if callback then callback(true, sorted, #sorted) end
+        return
+      end
+      if callback then callback(false, {}) end
+    end)
   end)
 end
 
@@ -878,12 +956,20 @@ function apiPost(endpoint, payload, callback)
       sender = payload.sender or currentUser.name,
       text = payload.text or "[Voice Message]",
       isVoice = payload.isVoice,
-      audio = payload.audio,
+      audio_id = payload.audio_id,
+      duration = payload.duration,
+      size_kb = payload.size_kb,
       time = payload.time or os.date("%I:%M %p"),
       timestamp = os.time()
     }
-    postFirebaseData("data/public_feed", msgObj, function(ok)
-      if callback then callback(ok) end
+    Http.post(BACKEND_URL .. "/api/public-feed", encodeJSON(msgObj), function(code, res)
+      if code == 200 then
+        if callback then callback(true) end
+      else
+        postFirebaseData("data/public_feed", msgObj, function(ok)
+          if callback then callback(ok) end
+        end)
+      end
     end)
 
   elseif string.find(endpoint, "/api/private%-messages") then
@@ -892,13 +978,21 @@ function apiPost(endpoint, payload, callback)
       recipient = payload.recipient,
       text = payload.text or "[Voice Message]",
       isVoice = payload.isVoice,
-      audio = payload.audio,
+      audio_id = payload.audio_id,
+      duration = payload.duration,
+      size_kb = payload.size_kb,
       time = payload.time or os.date("%I:%M %p"),
       timestamp = os.time()
     }
-    local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
-    postFirebaseData(filePath, msgObj, function(ok)
-      if callback then callback(ok) end
+    Http.post(BACKEND_URL .. "/api/private-messages", encodeJSON(msgObj), function(code, res)
+      if code == 200 then
+        if callback then callback(true) end
+      else
+        local filePath = getChatFilePath(msgObj.sender, msgObj.recipient)
+        postFirebaseData(filePath, msgObj, function(ok)
+          if callback then callback(ok) end
+        end)
+      end
     end)
 
   elseif string.find(endpoint, "/api/group%-messages") then
@@ -907,13 +1001,21 @@ function apiPost(endpoint, payload, callback)
       groupId = payload.groupId,
       text = payload.text or "[Voice Message]",
       isVoice = payload.isVoice,
-      audio = payload.audio,
+      audio_id = payload.audio_id,
+      duration = payload.duration,
+      size_kb = payload.size_kb,
       time = payload.time or os.date("%I:%M %p"),
       timestamp = os.time()
     }
-    local filePath = getGroupChatFilePath(msgObj.groupId)
-    postFirebaseData(filePath, msgObj, function(ok)
-      if callback then callback(ok) end
+    Http.post(BACKEND_URL .. "/api/group-messages", encodeJSON(msgObj), function(code, res)
+      if code == 200 then
+        if callback then callback(true) end
+      else
+        local filePath = getGroupChatFilePath(msgObj.groupId)
+        postFirebaseData(filePath, msgObj, function(ok)
+          if callback then callback(ok) end
+        end)
+      end
     end)
 
   elseif string.find(endpoint, "/api/heartbeat") or string.find(endpoint, "/api/login") then
@@ -963,16 +1065,65 @@ function downloadAndPlayVoiceNote(msgItem)
   import "android.widget.SeekBar"
   
   if not msgItem then return end
-  local audioData = msgItem.audio or msgItem.voicePath
-  
-  if not audioData or audioData == "" then
-    announce("Error: Voice note audio data not found.")
+  local audioId = msgItem.audio_id or (msgItem.timestamp and ("aud_legacy_" .. msgItem.timestamp))
+  local voiceFolder = getAppAudioDir()
+  local targetAudioFile = voiceFolder .. "/voice_" .. (audioId or "note") .. ".3gp"
+  local isFileReady = false
+
+  pcall(function()
+    local fObj = File(targetAudioFile)
+    if fObj.exists() and fObj.length() > 0 then isFileReady = true end
+  end)
+
+  if not isFileReady then
+    local fallbackM4a = voiceFolder .. "/voice_" .. (audioId or "note") .. ".m4a"
+    pcall(function()
+      local fObj = File(fallbackM4a)
+      if fObj.exists() and fObj.length() > 0 then
+        targetAudioFile = fallbackM4a
+        isFileReady = true
+      end
+    end)
+  end
+
+  if isFileReady then
+    playAudioDirectlyWithModal(targetAudioFile, msgItem)
     return
   end
+
+  -- If inline base64 exists (legacy fallback)
+  if msgItem.audio and #msgItem.audio > 100 then
+    isFileReady = decodeBase64ToAudioFile(msgItem.audio, targetAudioFile)
+    if isFileReady then
+      playAudioDirectlyWithModal(targetAudioFile, msgItem)
+      return
+    end
+  end
+
+  -- Download on-demand from Audio Vault
+  if audioId and audioId ~= "" then
+    announce("Downloading voice note (" .. (msgItem.duration or 0) .. "s, " .. (msgItem.size_kb or 0) .. " KB)...")
+    Http.get(BACKEND_URL .. "/api/audio?id=" .. audioId, function(code, content)
+      if code == 200 and content and content ~= "null" then
+        local res = decodeJSON(content)
+        if res and res.audio and #res.audio > 10 then
+          local ok = decodeBase64ToAudioFile(res.audio, targetAudioFile)
+          if ok then
+            playAudioDirectlyWithModal(targetAudioFile, msgItem)
+            return
+          end
+        end
+      end
+      announce("Failed to download voice note.")
+    end)
+  else
+    announce("Voice note audio not available.")
+  end
+end
+
+function playAudioDirectlyWithModal(targetAudioFile, msgItem)
+  local msgHash = (msgItem.audio_id or (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now")):gsub("%s+", ""):gsub(":", "")
   
-  local msgHash = (msgItem.sender or "voice") .. "_" .. (msgItem.time or "now"):gsub("%s+", ""):gsub(":", "")
-  
-  -- If this exact voice note is already playing, toggle pause/play
   if activeVoicePlayer and currentPlayingMsgHash == msgHash then
     local isPlaying = false
     pcall(function() isPlaying = activeVoicePlayer.isPlaying() end)
@@ -995,60 +1146,7 @@ function downloadAndPlayVoiceNote(msgItem)
     end
   end
   
-  -- Stop any previous playback
   stopActiveVoicePlayer()
-  
-  local voiceFolder = getAppAudioDir()
-  local targetAudioFile = voiceFolder .. "/voice_" .. msgHash .. ".m4a"
-  local isFileReady = false
-  
-  pcall(function()
-    local fObj = File(targetAudioFile)
-    if fObj.exists() and fObj.length() > 0 then isFileReady = true end
-  end)
-
-  if not isFileReady then
-    local fallback3gp = voiceFolder .. "/voice_" .. msgHash .. ".3gp"
-    pcall(function()
-      local fObj = File(fallback3gp)
-      if fObj.exists() and fObj.length() > 0 then
-        targetAudioFile = fallback3gp
-        isFileReady = true
-      end
-    end)
-  end
-
-  if not isFileReady then
-    pcall(function()
-      local fObj = File(audioData)
-      if fObj.exists() and fObj.length() > 0 then
-        targetAudioFile = audioData
-        isFileReady = true
-      end
-    end)
-  end
-  
-  if not isFileReady then
-    announce("Downloading voice note...")
-    isFileReady = decodeBase64ToAudioFile(audioData, targetAudioFile)
-    
-    -- Clean up cloud copy for private chat messages once downloaded locally
-    if isFileReady and activeTab == "private_chat" and activeChatTarget ~= "" then
-      pcall(function()
-        local chatPath = getChatFilePath(currentUser.name, activeChatTarget)
-        if msgItem._fb_key then
-          local fbItemUrl = FIREBASE_URL .. "/" .. chatPath:gsub("%.json$", "") .. "/" .. msgItem._fb_key .. "/audio.json"
-          Http.delete(fbItemUrl, function() end)
-        end
-      end)
-    end
-  end
-  
-  if not isFileReady then
-    announce("Failed to decode voice note audio.")
-    return
-  end
-  
   currentPlayingMsgHash = msgHash
   currentPlayingFilePath = targetAudioFile
   
@@ -1618,26 +1716,50 @@ function openVoiceRecordingModal(isPublic, targetName, isGroup)
 
     local b64Audio = encodeAudioFileToBase64(voiceRecordPath)
     if b64Audio and #b64Audio > 10 then
-      local msgObj = {
-        sender = currentUser.name,
-        recipient = targetName,
-        groupId = targetName,
-        text = "[Voice Message]",
-        isVoice = true,
+      announce("Uploading voice note to vault...")
+      local durationSec = 5
+      local sizeKb = math.max(1, math.floor(#b64Audio * 0.75 / 1024))
+      local uploadPayload = encodeJSON({
         audio = b64Audio,
-        voicePath = voiceRecordPath,
-        time = os.date("%I:%M %p"),
-        timestamp = os.time()
-      }
-      
-      if isGroup then
-        apiPost("/api/group-messages", msgObj, function() fetchGroupChatThread(targetName) end)
-      elseif isPublic then
-        apiPost("/api/public-feed", msgObj, function() fetchPublicFeedMessages() end)
-      else
-        apiPost("/api/private-messages", msgObj, function() fetchPrivateChatThread(targetName) end)
-      end
-      announce("Voice message sent successfully!")
+        duration = durationSec,
+        size_kb = sizeKb
+      })
+
+      Http.post(BACKEND_URL .. "/api/audio/upload", uploadPayload, function(code, res)
+        local audioId = "aud_" .. os.time()
+        if code == 200 and res and res ~= "null" then
+          local uDec = decodeJSON(res)
+          if uDec and uDec.audio_id then audioId = uDec.audio_id end
+        end
+
+        -- Cache local file under audio_id so the sender never needs to download it
+        pcall(function()
+          local localVaultFile = getAppAudioDir() .. "/voice_" .. audioId .. ".3gp"
+          File(voiceRecordPath).renameTo(File(localVaultFile))
+        end)
+
+        local msgObj = {
+          sender = currentUser.name,
+          recipient = targetName,
+          groupId = targetName,
+          text = "🎙️ Voice Message (" .. durationSec .. "s, " .. sizeKb .. "KB)",
+          isVoice = true,
+          audio_id = audioId,
+          duration = durationSec,
+          size_kb = sizeKb,
+          time = os.date("%I:%M %p"),
+          timestamp = os.time()
+        }
+        
+        if isGroup then
+          apiPost("/api/group-messages", msgObj, function() fetchGroupChatThread(targetName) end)
+        elseif isPublic then
+          apiPost("/api/public-feed", msgObj, function() fetchPublicFeedMessages() end)
+        else
+          apiPost("/api/private-messages", msgObj, function() fetchPrivateChatThread(targetName) end)
+        end
+        announce("Voice message sent successfully!")
+      end)
     else
       announce("Voice recording too short or empty.")
     end

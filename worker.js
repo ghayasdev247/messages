@@ -468,16 +468,158 @@ export default {
         }
       }
 
-      // Public Feed API
+      // ====================================================================
+      // 9. ON-DEMAND AUDIO VAULT & STREAMING
+      // ====================================================================
+
+      // Upload Audio to Vault
+      if (path === "/api/audio/upload" && method === "POST") {
+        const body = await request.json();
+        const rawAudio = body.audio || "";
+        const duration = Number(body.duration || 0);
+        const sizeKb = Number(body.size_kb || Math.round(rawAudio.length * 0.75 / 1024));
+        const audioId = body.audio_id || `aud_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+        if (!rawAudio) {
+          return new Response(JSON.stringify({ success: false, error: "Audio data required" }), { headers: CORS_HEADERS, status: 400 });
+        }
+
+        const audioVaultObj = {
+          audio_id: audioId,
+          audio: rawAudio,
+          duration: duration,
+          size_kb: sizeKb,
+          uploaded_at: Math.floor(Date.now() / 1000),
+          ip: clientIP
+        };
+
+        await fetch(`${FIREBASE_DB}/data/audio_vault/${audioId}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(audioVaultObj)
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          audio_id: audioId,
+          duration: duration,
+          size_kb: sizeKb
+        }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // Fetch Audio from Vault (On-Demand with Immutable Cache)
+      if ((path === "/api/audio" || path.startsWith("/api/audio/")) && method === "GET") {
+        let audioId = url.searchParams.get("id") || path.replace("/api/audio/", "");
+        audioId = audioId.replace(/[^a-zA-Z0-9_-]/g, "");
+
+        if (!audioId) {
+          return new Response(JSON.stringify({ success: false, error: "Missing audio ID" }), { headers: CORS_HEADERS, status: 400 });
+        }
+
+        const clientEtag = request.headers.get("if-none-match");
+        if (clientEtag && clientEtag === `"${audioId}"`) {
+          return new Response(null, {
+            status: 304,
+            headers: {
+              ...CORS_HEADERS,
+              "ETag": `"${audioId}"`,
+              "Cache-Control": "public, max-age=31536000, immutable"
+            }
+          });
+        }
+
+        const res = await fetch(`${FIREBASE_DB}/data/audio_vault/${audioId}.json`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.audio) {
+            return new Response(JSON.stringify({
+              success: true,
+              audio_id: audioId,
+              audio: data.audio,
+              duration: data.duration || 0,
+              size_kb: data.size_kb || 0
+            }), {
+              headers: {
+                ...CORS_HEADERS,
+                "ETag": `"${audioId}"`,
+                "Cache-Control": "public, max-age=31536000, immutable"
+              },
+              status: 200
+            });
+          }
+        }
+        return new Response(JSON.stringify({ success: false, error: "Audio note not found" }), { headers: CORS_HEADERS, status: 404 });
+      }
+
+      // Helper function for processing delta messages & windowing
+      async function handleMessageFeedResponse(rawFeed, req) {
+        const reqUrl = new URL(req.url);
+        const sinceTs = Number(reqUrl.searchParams.get("since_ts") || 0);
+        const limit = Math.min(Math.max(Number(reqUrl.searchParams.get("limit") || 30), 1), 100);
+
+        let list = [];
+        if (rawFeed && typeof rawFeed === "object") {
+          list = Array.isArray(rawFeed) ? rawFeed : Object.values(rawFeed);
+        }
+
+        // Sort ascending by timestamp
+        list.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+
+        // Strip heavy inline base64 audio to minimize bandwidth (transmits audio_id instead)
+        const lightList = list.map(m => {
+          if (!m || typeof m !== "object") return m;
+          const copy = { ...m };
+          if (copy.audio && copy.audio.length > 500) {
+            if (!copy.audio_id) copy.audio_id = `aud_legacy_${copy.timestamp || Date.now()}`;
+            delete copy.audio; // strip large base64 from feed
+          }
+          return copy;
+        });
+
+        let resultList = lightList;
+        if (sinceTs > 0) {
+          resultList = lightList.filter(m => Number(m.timestamp || 0) > sinceTs);
+        } else {
+          resultList = lightList.slice(-limit);
+        }
+
+        const latestTs = resultList.length > 0 ? Number(resultList[resultList.length - 1].timestamp || 0) : 0;
+        const etag = `W/"${resultList.length}-${latestTs}"`;
+
+        const clientEtag = req.headers.get("if-none-match");
+        if (clientEtag && clientEtag === etag && resultList.length === 0) {
+          return new Response(null, {
+            status: 304,
+            headers: {
+              ...CORS_HEADERS,
+              "ETag": etag,
+              "Cache-Control": "public, max-age=1"
+            }
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          delta: Boolean(sinceTs > 0),
+          count: resultList.length,
+          latest_timestamp: latestTs,
+          messages: resultList
+        }), {
+          headers: {
+            ...CORS_HEADERS,
+            "ETag": etag,
+            "Cache-Control": "public, max-age=1"
+          },
+          status: 200
+        });
+      }
+
+      // Public Feed API (Delta & On-Demand Voice Support)
       if (path === "/api/public-feed") {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/public_feed.json`);
           const data = fbRes.ok ? await fbRes.json() : null;
-          let list = [];
-          if (data && typeof data === "object") {
-            list = Array.isArray(data) ? data : Object.values(data);
-          }
-          return new Response(JSON.stringify({ success: true, messages: list }), { headers: CORS_HEADERS, status: 200 });
+          return await handleMessageFeedResponse(data, request);
         } else if (method === "POST") {
           const body = await request.json();
           const sender = body.sender || "Anonymous";
@@ -499,11 +641,24 @@ export default {
             }
           }
 
+          let audioId = body.audio_id || null;
+          if (body.audio && !audioId) {
+            audioId = `aud_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            await fetch(`${FIREBASE_DB}/data/audio_vault/${audioId}.json`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ audio_id: audioId, audio: body.audio, uploaded_at: Math.floor(Date.now() / 1000) })
+            });
+          }
+
           const msgObj = {
+            id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
             sender: sender,
             text: body.text || "[Voice Message]",
-            isVoice: Boolean(body.isVoice || body.audio),
-            audio: body.audio || null,
+            isVoice: Boolean(body.isVoice || audioId || body.audio),
+            audio_id: audioId,
+            duration: Number(body.duration || 0),
+            size_kb: Number(body.size_kb || 0),
             time: body.time || new Date().toLocaleTimeString(),
             timestamp: Math.floor(Date.now() / 1000),
             ip: clientIP
@@ -615,7 +770,7 @@ export default {
         }
       }
 
-      // Private Messages API
+      // Private Messages API (Delta & On-Demand Voice Support)
       if (path === "/api/private-messages") {
         const u1 = (url.searchParams.get("user") || "").trim().toLowerCase();
         const u2 = (url.searchParams.get("target") || "").trim().toLowerCase();
@@ -624,23 +779,32 @@ export default {
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/chats/${chatKey}.json`);
           const data = fbRes.ok ? await fbRes.json() : null;
-          let list = [];
-          if (data && typeof data === "object") {
-            list = Array.isArray(data) ? data : Object.values(data);
-          }
-          return new Response(JSON.stringify({ success: true, messages: list }), { headers: CORS_HEADERS, status: 200 });
+          return await handleMessageFeedResponse(data, request);
         } else if (method === "POST") {
           const body = await request.json();
-          const sender = (body.sender || "").trim().toLowerCase();
-          const recipient = (body.recipient || "").trim().toLowerCase();
-          const postKey = sender < recipient ? `${sender}_${recipient}` : `${recipient}_${sender}`;
+          const sender = (body.sender || "").trim();
+          const recipient = (body.recipient || "").trim();
+          const postKey = sender.toLowerCase() < recipient.toLowerCase() ? `${sender.toLowerCase()}_${recipient.toLowerCase()}` : `${recipient.toLowerCase()}_${sender.toLowerCase()}`;
           
+          let audioId = body.audio_id || null;
+          if (body.audio && !audioId) {
+            audioId = `aud_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            await fetch(`${FIREBASE_DB}/data/audio_vault/${audioId}.json`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ audio_id: audioId, audio: body.audio, uploaded_at: Math.floor(Date.now() / 1000) })
+            });
+          }
+
           const msgObj = {
-            sender: body.sender,
-            recipient: body.recipient,
+            id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+            sender: sender,
+            recipient: recipient,
             text: body.text || "[Voice Message]",
-            isVoice: Boolean(body.isVoice || body.audio),
-            audio: body.audio || null,
+            isVoice: Boolean(body.isVoice || audioId || body.audio),
+            audio_id: audioId,
+            duration: Number(body.duration || 0),
+            size_kb: Number(body.size_kb || 0),
             time: body.time || new Date().toLocaleTimeString(),
             timestamp: Math.floor(Date.now() / 1000),
             ip: clientIP
@@ -686,26 +850,36 @@ export default {
         }
       }
 
-      // Group Chat Messages API
+      // Group Chat Messages API (Delta & On-Demand Voice Support)
       if (path === "/api/group-messages") {
         const groupId = url.searchParams.get("group") || "general";
         if (method === "GET") {
           const fbRes = await fetch(`${FIREBASE_DB}/data/groups/${groupId}_messages.json`);
           const data = fbRes.ok ? await fbRes.json() : null;
-          let list = [];
-          if (data && typeof data === "object") {
-            list = Array.isArray(data) ? data : Object.values(data);
-          }
-          return new Response(JSON.stringify({ success: true, messages: list }), { headers: CORS_HEADERS, status: 200 });
+          return await handleMessageFeedResponse(data, request);
         } else if (method === "POST") {
           const body = await request.json();
           const targetGroup = body.groupId || groupId;
+          
+          let audioId = body.audio_id || null;
+          if (body.audio && !audioId) {
+            audioId = `aud_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+            await fetch(`${FIREBASE_DB}/data/audio_vault/${audioId}.json`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ audio_id: audioId, audio: body.audio, uploaded_at: Math.floor(Date.now() / 1000) })
+            });
+          }
+
           const msgObj = {
+            id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
             sender: body.sender,
             groupId: targetGroup,
             text: body.text || "[Voice Message]",
-            isVoice: Boolean(body.isVoice || body.audio),
-            audio: body.audio || null,
+            isVoice: Boolean(body.isVoice || audioId || body.audio),
+            audio_id: audioId,
+            duration: Number(body.duration || 0),
+            size_kb: Number(body.size_kb || 0),
             time: body.time || new Date().toLocaleTimeString(),
             timestamp: Math.floor(Date.now() / 1000),
             ip: clientIP
