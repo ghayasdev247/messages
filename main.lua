@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.9.0"
-local APP_VERSION_CODE = 60
+local APP_VERSION = "3.9.1"
+local APP_VERSION_CODE = 61
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -92,6 +92,10 @@ function getAppAudioDir()
     if not folder.exists() then folder.mkdirs() end
   end)
   return dir
+end
+
+function getAppDataDir()
+  return getAppAudioDir()
 end
 
 function getSavedAccountPath()

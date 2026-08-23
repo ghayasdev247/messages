@@ -1,7 +1,7 @@
 {
-  "version": "3.9.0",
-  "version_code": 60,
+  "version": "3.9.1",
+  "version_code": 61,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.9.0: Ultra-Low Bandwidth & Delta Sync Architecture (On-demand voice streaming via Audio Vault, Delta queries with 30-message windowing, local disk cache, and ETag/304 HTTP caching)."
+  "changelog": "Version 3.9.1: Fixed getAppDataDir nil value runtime error during local delta caching and private chat initialisation."
 }

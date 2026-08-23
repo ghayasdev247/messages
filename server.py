@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.9.0",
-                "version_code": 60,
+                "version": "3.9.1",
+                "version_code": 61,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.9.0: Ultra-Low Bandwidth & Delta Sync Engine (On-demand voice streaming via Audio Vault, Delta queries with 30-message windowing, local disk cache, and ETag/304 HTTP caching)."
+                "changelog": "Version 3.9.1: Fixed getAppDataDir nil value runtime error during local delta caching and private chat initialisation."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
