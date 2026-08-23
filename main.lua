@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.7.0"
-local APP_VERSION_CODE = 55
+local APP_VERSION = "3.7.1"
+local APP_VERSION_CODE = 56
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -3089,8 +3089,9 @@ function updateHomeRecentChatsUI()
   -- Gather all 1-on-1 conversations from savedContacts & privateChatHistory
   local threads = {}
   local seenContacts = {}
+  local contacts = (loadPrivateContacts and loadPrivateContacts()) or {}
   
-  for contactName, _ in pairs(savedContacts) do
+  for contactName, _ in pairs(contacts) do
     if contactName ~= "" and contactName ~= currentUser.name then
       seenContacts[contactName] = true
       local msgs = privateChatHistory[contactName] or {}
@@ -3114,26 +3115,28 @@ function updateHomeRecentChatsUI()
     end
   end
   
-  for contactName, msgs in pairs(privateChatHistory) do
-    if contactName ~= "" and contactName ~= currentUser.name and not seenContacts[contactName] then
-      seenContacts[contactName] = true
-      local lastMsg = #msgs > 0 and msgs[#msgs] or nil
-      local lastSnippet = "Tap to open chat"
-      local lastTime = ""
-      if lastMsg then
-        if lastMsg.isVoice or lastMsg.audio then
-          lastSnippet = "🎙️ Voice Note"
-        else
-          lastSnippet = cleanMessageText(lastMsg.text, false)
+  if type(privateChatHistory) == "table" then
+    for contactName, msgs in pairs(privateChatHistory) do
+      if contactName ~= "" and contactName ~= currentUser.name and not seenContacts[contactName] then
+        seenContacts[contactName] = true
+        local lastMsg = type(msgs) == "table" and #msgs > 0 and msgs[#msgs] or nil
+        local lastSnippet = "Tap to open chat"
+        local lastTime = ""
+        if lastMsg then
+          if lastMsg.isVoice or lastMsg.audio then
+            lastSnippet = "🎙️ Voice Note"
+          else
+            lastSnippet = cleanMessageText(lastMsg.text, false)
+          end
+          lastTime = lastMsg.time or ""
         end
-        lastTime = lastMsg.time or ""
+        table.insert(threads, {
+          name = contactName,
+          lastSnippet = lastSnippet,
+          time = lastTime,
+          lastTimestamp = lastMsg and (lastMsg.timestamp or 0) or 0
+        })
       end
-      table.insert(threads, {
-        name = contactName,
-        lastSnippet = lastSnippet,
-        time = lastTime,
-        lastTimestamp = lastMsg and (lastMsg.timestamp or 0) or 0
-      })
     end
   end
   
@@ -3243,7 +3246,8 @@ function showNewChatUserPickerDialog()
       end
     end
     
-    for contactName, _ in pairs(savedContacts) do
+    local contacts = (loadPrivateContacts and loadPrivateContacts()) or {}
+    for contactName, _ in pairs(contacts) do
       if contactName ~= "" and contactName ~= currentUser.name and not addedMap[string.lower(contactName)] then
         addedMap[string.lower(contactName)] = true
         table.insert(userOptions, "👤 " .. contactName .. " (⚪ Offline)")

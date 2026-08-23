@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.7.0",
-                "version_code": 55,
+                "version": "3.7.1",
+                "version_code": 56,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.7.0: Comprehensive UI/UX Redesign - Dynamic Recent Chats Inbox on Home with 'New Chat' action button, and structured 3-tier card layout in Settings (Profile, Maintenance, and Security)."
+                "changelog": "Version 3.7.1: Fixed saved contacts lookup table initialization in Home recent chats view."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
