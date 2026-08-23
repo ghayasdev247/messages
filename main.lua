@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.7.1"
-local APP_VERSION_CODE = 56
+local APP_VERSION = "3.7.2"
+local APP_VERSION_CODE = 57
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2813,17 +2813,6 @@ function showMainAppContainer()
       };
       {
         Button;
-        id = "tabBtnPrivate";
-        text = "👤 Contacts";
-        layout_weight = "1";
-        layout_height = "fill";
-        textSize = "12sp";
-        textColor = "#555555";
-        backgroundColor = "#FFFFFF";
-        ContentDescription = "Contacts and Online Users Tab. Double tap to open.";
-      };
-      {
-        Button;
         id = "tabBtnYou";
         text = "⚙️ Settings";
         layout_weight = "1";
@@ -2841,7 +2830,6 @@ function showMainAppContainer()
   tabBtnHome.onClick = function() switchTab("home") end
   tabBtnLounge.onClick = function() switchTab("lounge") end
   tabBtnPublic.onClick = function() switchTab("public") end
-  tabBtnPrivate.onClick = function() switchTab("private") end
   tabBtnYou.onClick = function() switchTab("you") end
 end
 
@@ -2850,7 +2838,6 @@ function updateTabButtonsUI(currentTab)
     home = tabBtnHome,
     lounge = tabBtnLounge,
     public = tabBtnPublic,
-    private = tabBtnPrivate,
     you = tabBtnYou
   }
   for name, btn in pairs(buttons) do
@@ -2884,10 +2871,6 @@ function switchTab(tabName)
     tabContentContainer.addView(createPublicTabView())
     fetchPublicFeedMessages()
     announce("Public Lobby Tab selected.")
-  elseif tabName == "private" then
-    tabContentContainer.addView(createPrivateTabView())
-    fetchOnlineUsersList()
-    announce("Contacts and Online Users Tab selected.")
   elseif tabName == "you" then
     tabContentContainer.addView(createYouTabView())
     announce("Settings and Profile Tab selected.")
@@ -5162,7 +5145,7 @@ function openPrivateChatScreen(targetUsername)
     privateChatHistory[targetUsername] = nil
     activeChatTarget = ""
     showMainAppContainer()
-    switchTab("private")
+    switchTab("home")
   end
 end
 
