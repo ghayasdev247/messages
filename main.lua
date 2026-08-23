@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.8.0"
-local APP_VERSION_CODE = 58
+local APP_VERSION = "3.8.1"
+local APP_VERSION_CODE = 59
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2095,11 +2095,12 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
   isCallActive = true
   activeCallRoomId = roomId
   activeCallType = callType
+  if targetUser and targetUser ~= "" then activeChatTarget = targetUser end
   activeCallTitle = callTitle or "Live Voice Call"
   isCallMicMuted = false
   isCallSpeakerOn = true
   callDurationTimer = 0
-  callParticipants = {}
+  callParticipants = { { name = currentUser.name, isOnline = true } }
   
   initWebRTCVoiceEngine()
   setWebRTCSpeakerRoute(true)
@@ -2117,6 +2118,11 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
       local dec = decodeJSON(res)
       if dec and dec.peers and type(dec.peers) == "table" then
         peers = dec.peers
+        for _, p in ipairs(peers) do
+          if p and p ~= currentUser.name then
+            table.insert(callParticipants, { name = p, isOnline = true })
+          end
+        end
       end
     end
     
@@ -2127,6 +2133,7 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
     end
     
     showLiveCallModal()
+    updateCallParticipantsList()
     startWebRTCCallLoops()
   end)
 end
@@ -2194,6 +2201,7 @@ function showLiveCallModal()
       layout_marginBottom = "8dp";
       {
         TextView;
+        id = "txtLiveCallTitle";
         text = activeCallTitle;
         textSize = "18sp";
         textColor = "#25D366";
@@ -2371,32 +2379,50 @@ function updateCallParticipantsList()
   
   local data = {}
   local count = 0
+  local seenUsers = {}
+  
   for _, p in ipairs(callParticipants) do
     if type(p) == "table" or type(p) == "string" then
-      count = count + 1
       local uName = type(p) == "table" and (p.name or "User") or p
-      local statusStr = "🟢 WebRTC Connected"
-      if uName == currentUser.name then
-        uName = uName .. " (You)"
-        statusStr = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
+      local cleanN = uName:gsub("^%s+", ""):gsub("%s+$", "")
+      if not seenUsers[string.lower(cleanN)] then
+        seenUsers[string.lower(cleanN)] = true
+        count = count + 1
+        local statusStr = "🟢 Live WebRTC"
+        if string.lower(cleanN) == string.lower(currentUser.name) then
+          uName = cleanN .. " (You)"
+          statusStr = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
+        end
+        table.insert(data, {
+          txtCallItemUser = "👤 " .. uName,
+          txtCallItemStatus = statusStr
+        })
       end
-      table.insert(data, {
-        txtCallItemUser = "👤 " .. uName,
-        txtCallItemStatus = statusStr
-      })
     end
   end
   
-  if count == 0 then
+  if not seenUsers[string.lower(currentUser.name)] then
     table.insert(data, {
       txtCallItemUser = "👤 " .. currentUser.name .. " (You)",
       txtCallItemStatus = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
     })
-    count = 1
+    count = count + 1
   end
   
   if txtCallParticipantsCount then
-    txtCallParticipantsCount.setText("👥 " .. count .. " Connected (WebRTC)")
+    if activeCallType == "private" then
+      if count <= 1 then
+        txtCallParticipantsCount.setText("📞 Calling " .. (activeChatTarget or "User") .. " (Ringing...)")
+      else
+        txtCallParticipantsCount.setText("🟢 1-on-1 Connected (" .. count .. " Active)")
+      end
+    else
+      if count == 1 then
+        txtCallParticipantsCount.setText("🟢 Live Stage (1 Active - You)")
+      else
+        txtCallParticipantsCount.setText("👥 " .. count .. " Connected (WebRTC)")
+      end
+    end
   end
   
   local adapter = LuaAdapter(activity, data, itemLayout)
@@ -2431,11 +2457,18 @@ function pollWebRTCSignals()
   Http.get(signalUrl, function(code, content)
     if isCallActive and code == 200 and content and content ~= "null" then
       local res = decodeJSON(content)
-      if res and res.signals and type(res.signals) == "table" and #res.signals > 0 then
-        if headlessWebRTCWebView then
-          local sigJson = encodeJSON(res.signals)
-          local jsCall = string.format("window.processRemoteSignals('%s');", sigJson:gsub("'", "\\'"))
-          headlessWebRTCWebView.evaluateJavascript(jsCall, nil)
+      if res and type(res) == "table" then
+        if res.signals and type(res.signals) == "table" and #res.signals > 0 then
+          if headlessWebRTCWebView then
+            local sigJson = encodeJSON(res.signals)
+            local jsCall = string.format("window.processRemoteSignals('%s');", sigJson:gsub("'", "\\'"))
+            headlessWebRTCWebView.evaluateJavascript(jsCall, nil)
+          end
+        end
+        
+        if res.participants and type(res.participants) == "table" then
+          callParticipants = res.participants
+          updateCallParticipantsList()
         end
       end
     end
@@ -2455,6 +2488,7 @@ function initiatePrivate1on1Call(targetUser)
   local lowT = string.lower(cleanTarget):gsub("[^a-z0-9]", "_")
   local lowM = string.lower(cleanMe):gsub("[^a-z0-9]", "_")
   local roomId = "private_call_" .. (lowM < lowT and (lowM .. "_" .. lowT) or (lowT .. "_" .. lowM))
+  activeChatTarget = cleanTarget
   
   local callPayload = encodeJSON({
     action = "call",
@@ -2464,7 +2498,7 @@ function initiatePrivate1on1Call(targetUser)
   })
   Http.post(BACKEND_URL .. "/api/call/signal", callPayload, function() end)
   
-  startOrJoinVoiceCall(roomId, "private", "📞 WebRTC Call: " .. cleanTarget, cleanTarget)
+  startOrJoinVoiceCall(roomId, "private", "📞 Calling: " .. cleanTarget, cleanTarget)
 end
 
 function checkIncomingCallSignals()

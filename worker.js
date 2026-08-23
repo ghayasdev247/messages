@@ -308,15 +308,24 @@ export default {
         return new Response(JSON.stringify({ success: true, signalId: signalId }), { headers: CORS_HEADERS, status: 200 });
       }
 
-      // WebRTC Signals Poller (Fetch & Clean Pending Signals for User)
+      // WebRTC Signals Poller (Fetch & Clean Pending Signals for User + Room Peer Sync)
       if (path === "/api/webrtc/signals" && method === "GET") {
         const roomId = (url.searchParams.get("room") || "").replace(/[^a-zA-Z0-9_-]/g, "_");
         const user = (url.searchParams.get("user") || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const nowSec = Math.floor(Date.now() / 1000);
 
         if (!roomId || !user) {
           return new Response(JSON.stringify({ success: false, error: "Missing room or user parameter" }), { headers: CORS_HEADERS, status: 400 });
         }
 
+        // 1. Update heartbeat
+        await fetch(`${FIREBASE_DB}/data/webrtc_rooms/${roomId}/peers/${user}/last_ping.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(nowSec)
+        });
+
+        // 2. Fetch pending signals
         const res = await fetch(`${FIREBASE_DB}/data/webrtc_signals/${roomId}/${user}.json`);
         const rawSignals = res.ok ? await res.json() : null;
         let signalList = [];
@@ -327,10 +336,27 @@ export default {
           await fetch(`${FIREBASE_DB}/data/webrtc_signals/${roomId}/${user}.json`, { method: "DELETE" });
         }
 
+        // 3. Fetch active peers in room
+        const peersRes = await fetch(`${FIREBASE_DB}/data/webrtc_rooms/${roomId}/peers.json`);
+        const rawPeers = peersRes.ok ? await peersRes.json() : {};
+        let activePeersList = [];
+
+        if (rawPeers && typeof rawPeers === "object") {
+          for (const key in rawPeers) {
+            const peer = rawPeers[key];
+            if (peer && typeof peer === "object" && peer.name) {
+              if (nowSec - Number(peer.last_ping || 0) <= 30) {
+                activePeersList.push({ name: peer.name, isOnline: true });
+              }
+            }
+          }
+        }
+
         return new Response(JSON.stringify({
           success: true,
           roomId: roomId,
           signals: signalList,
+          participants: activePeersList,
           iceServers: [
             { urls: "stun:stun.l.google.com:19302" },
             { urls: "stun:stun1.l.google.com:19302" },

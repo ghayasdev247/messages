@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.8.0",
-                "version_code": 58,
+                "version": "3.8.1",
+                "version_code": 59,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.8.0: WebRTC Real-Time Voice Calling Engine (Zero-latency P2P for 1-on-1 private calls and Multi-Peer Mesh for Lounge Groups & Public Voice Stage)."
+                "changelog": "Version 3.8.1: Enhanced WebRTC Call Connection & Participant Sync (Eliminated hanging connecting status, added real-time active stage speaker status and 1-on-1 ringing detection)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
