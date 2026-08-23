@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.7.2"
-local APP_VERSION_CODE = 57
+local APP_VERSION = "3.8.0"
+local APP_VERSION_CODE = 58
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -1873,7 +1873,7 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGrou
 end
 
 -- --------------------------------------------------------------------
--- 📞 LIVE VOICE CALL & GROUP AUDIO STAGE ENGINE
+-- 📞 WEBRTC REAL-TIME VOICE CALL & AUDIO STAGE ENGINE
 -- --------------------------------------------------------------------
 local isCallActive = false
 local activeCallRoomId = ""
@@ -1884,28 +1884,205 @@ local isCallSpeakerOn = true
 local activeCallDialog = nil
 local callDurationTimer = 0
 local callParticipants = {}
-local callAudioQuality = "HD"
-local activeCallRecorder = nil
-local lastPlayedAudioSeq = 0
-local isCallChunkTransmitting = false
+local callAudioQuality = "WebRTC HD (Opus)"
 local listCallParticipantsWidget = nil
 local txtCallTimerWidget = nil
 local txtCallParticipantsCount = nil
 local txtCallQualityWidget = nil
 local btnCallMuteWidget = nil
 local btnCallSpeakerWidget = nil
+local headlessWebRTCWebView = nil
+local isWebRTCInitialized = false
 
-function detectAdaptiveCallQuality(callback)
-  local tStart = os.time()
-  Http.get(BACKEND_URL .. "/api/ping?t=" .. tStart, function(code, content)
-    local rttMs = 80
-    if code ~= 200 then rttMs = 200 end
-    if rttMs < 120 then
-      callAudioQuality = "HD"
-    else
-      callAudioQuality = "DataSaver"
-    end
-    if callback then callback(callAudioQuality) end
+function initWebRTCVoiceEngine()
+  if isWebRTCInitialized and headlessWebRTCWebView then return end
+  pcall(function()
+    import "android.webkit.WebView"
+    import "android.webkit.WebSettings"
+    import "android.webkit.WebChromeClient"
+    import "android.webkit.PermissionRequest"
+    
+    headlessWebRTCWebView = WebView(activity)
+    local ws = headlessWebRTCWebView.getSettings()
+    ws.setJavaScriptEnabled(true)
+    ws.setMediaPlaybackRequiresUserGesture(false)
+    ws.setDomStorageEnabled(true)
+    
+    headlessWebRTCWebView.setWebChromeClient(luajava.override(WebChromeClient, {
+      onPermissionRequest = function(super, request)
+        pcall(function()
+          request.grant(request.getResources())
+        end)
+      end
+    }))
+    
+    local webrtcHtml = [[
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>WebRTC Voice Engine</title></head>
+<body>
+<div id="audio-container"></div>
+<script>
+  let localStream = null;
+  let peerConnections = {};
+  let currentRoom = "";
+  let myUsername = "";
+  let isMuted = false;
+
+  const iceServers = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" }
+  ];
+
+  async function startLocalAudio() {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 48000
+        },
+        video: false
+      });
+      return true;
+    } catch(err) {
+      console.error("Local audio error:", err);
+      return false;
+    }
+  }
+
+  function getOrCreatePeerConnection(targetUser) {
+    if (peerConnections[targetUser]) return peerConnections[targetUser];
+    
+    const pc = new RTCPeerConnection({ iceServers });
+    peerConnections[targetUser] = pc;
+
+    if (localStream) {
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendSignal(targetUser, "candidate", event.candidate);
+      }
+    };
+
+    pc.ontrack = (event) => {
+      let audioEl = document.getElementById("audio_" + targetUser);
+      if (!audioEl) {
+        audioEl = document.createElement("audio");
+        audioEl.id = "audio_" + targetUser;
+        audioEl.autoplay = true;
+        document.getElementById("audio-container").appendChild(audioEl);
+      }
+      audioEl.srcObject = event.streams[0];
+    };
+
+    return pc;
+  }
+
+  async function createOffer(targetUser) {
+    const pc = getOrCreatePeerConnection(targetUser);
+    const offer = await pc.createOffer({ offerToReceiveAudio: true });
+    await pc.setLocalDescription(offer);
+    sendSignal(targetUser, "offer", offer);
+  }
+
+  async function handleSignal(sig) {
+    const sender = sig.sender;
+    const type = sig.type;
+    const data = sig.data;
+
+    if (type === "offer") {
+      const pc = getOrCreatePeerConnection(sender);
+      await pc.setRemoteDescription(new RTCSessionDescription(data));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendSignal(sender, "answer", answer);
+    } else if (type === "answer") {
+      const pc = getOrCreatePeerConnection(sender);
+      await pc.setRemoteDescription(new RTCSessionDescription(data));
+    } else if (type === "candidate" && data) {
+      const pc = getOrCreatePeerConnection(sender);
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(data));
+      } catch(e) {}
+    } else if (type === "bye") {
+      closePeer(sender);
+    }
+  }
+
+  function closePeer(targetUser) {
+    if (peerConnections[targetUser]) {
+      peerConnections[targetUser].close();
+      delete peerConnections[targetUser];
+    }
+    const audioEl = document.getElementById("audio_" + targetUser);
+    if (audioEl) audioEl.remove();
+  }
+
+  function sendSignal(target, type, data) {
+    fetch("https://messages.vistudio247.workers.dev/api/webrtc/signal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        roomId: currentRoom,
+        sender: myUsername,
+        target: target,
+        type: type,
+        data: data
+      })
+    }).catch(e => console.error("Signal send failed", e));
+  }
+
+  window.joinWebRTCRoom = async function(room, user, existingPeersJson) {
+    currentRoom = room;
+    myUsername = user;
+    const ok = await startLocalAudio();
+    if (!ok) return;
+
+    let peers = [];
+    try { peers = JSON.parse(existingPeersJson || "[]"); } catch(e) {}
+    for (let p of peers) {
+      if (p && p !== myUsername) {
+        createOffer(p);
+      }
+    }
+  };
+
+  window.processRemoteSignals = function(signalsJson) {
+    let signals = [];
+    try { signals = JSON.parse(signalsJson || "[]"); } catch(e) {}
+    for (let s of signals) {
+      if (s) handleSignal(s);
+    }
+  };
+
+  window.setWebRTCMuted = function(muted) {
+    isMuted = muted;
+    if (localStream) {
+      localStream.getAudioTracks().forEach(t => t.enabled = !muted);
+    }
+  };
+
+  window.leaveWebRTCRoom = function() {
+    for (let p in peerConnections) {
+      closePeer(p);
+    }
+    if (localStream) {
+      localStream.getTracks().forEach(t => t.stop());
+      localStream = null;
+    }
+  };
+</script>
+</body>
+</html>
+]]
+    headlessWebRTCWebView.loadDataWithBaseURL("https://messages.vistudio247.workers.dev", webrtcHtml, "text/html", "utf-8", nil)
+    isWebRTCInitialized = true
   end)
 end
 
@@ -1923,22 +2100,34 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
   isCallSpeakerOn = true
   callDurationTimer = 0
   callParticipants = {}
-  lastPlayedAudioSeq = 0
   
-  detectAdaptiveCallQuality(function(quality)
-    announce("Joining " .. activeCallTitle .. " with " .. quality .. " Audio Quality...")
+  initWebRTCVoiceEngine()
+  setWebRTCSpeakerRoute(true)
+  
+  announce("Connecting to WebRTC Real-Time Voice Channel...")
+  
+  local joinPayload = encodeJSON({
+    roomId = activeCallRoomId,
+    username = currentUser.name
+  })
+  
+  Http.post(BACKEND_URL .. "/api/webrtc/room/join", joinPayload, function(code, res)
+    local peers = {}
+    if code == 200 and res and res ~= "null" then
+      local dec = decodeJSON(res)
+      if dec and dec.peers and type(dec.peers) == "table" then
+        peers = dec.peers
+      end
+    end
     
-    local joinPayload = encodeJSON({
-      roomId = activeCallRoomId,
-      username = currentUser.name,
-      isMuted = isCallMicMuted,
-      quality = quality
-    })
+    if headlessWebRTCWebView then
+      local peersJson = encodeJSON(peers)
+      local jsCall = string.format("window.joinWebRTCRoom('%s', '%s', '%s');", activeCallRoomId, currentUser.name, peersJson:gsub("'", "\\'"))
+      headlessWebRTCWebView.evaluateJavascript(jsCall, nil)
+    end
     
-    Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function(code, res)
-      showLiveCallModal()
-      startCallAudioLoops()
-    end)
+    showLiveCallModal()
+    startWebRTCCallLoops()
   end)
 end
 
@@ -1946,19 +2135,17 @@ function leaveActiveVoiceCall()
   if not isCallActive then return end
   isCallActive = false
   
-  pcall(function()
-    if activeCallRecorder then
-      activeCallRecorder.stop()
-      activeCallRecorder.release()
-      activeCallRecorder = nil
-    end
-  end)
+  if headlessWebRTCWebView then
+    pcall(function()
+      headlessWebRTCWebView.evaluateJavascript("window.leaveWebRTCRoom();", nil)
+    end)
+  end
   
   local leavePayload = encodeJSON({
     roomId = activeCallRoomId,
     username = currentUser.name
   })
-  Http.post(BACKEND_URL .. "/api/call/leave", leavePayload, function() end)
+  Http.post(BACKEND_URL .. "/api/webrtc/room/leave", leavePayload, function() end)
   
   if activeCallType == "private" and activeChatTarget and activeChatTarget ~= "" then
     local endPayload = encodeJSON({
@@ -1975,7 +2162,20 @@ function leaveActiveVoiceCall()
     activeCallDialog = nil
   end
   
-  announce("Left voice call. Call session finished.")
+  setWebRTCSpeakerRoute(false)
+  announce("Voice call disconnected. Audio session closed.")
+end
+
+function setWebRTCSpeakerRoute(isSpeaker)
+  pcall(function()
+    import "android.media.AudioManager"
+    import "android.content.Context"
+    local am = activity.getSystemService(Context.AUDIO_SERVICE)
+    if am then
+      am.setMode(AudioManager.MODE_IN_COMMUNICATION)
+      am.setSpeakerphoneOn(isSpeaker)
+    end
+  end)
 end
 
 function showLiveCallModal()
@@ -1999,7 +2199,7 @@ function showLiveCallModal()
         textColor = "#25D366";
         Typeface = Typeface.DEFAULT_BOLD;
         layout_weight = "1";
-        ContentDescription = activeCallTitle .. " Live Call Session";
+        ContentDescription = activeCallTitle .. " Live WebRTC Session";
       };
       {
         TextView;
@@ -2019,7 +2219,7 @@ function showLiveCallModal()
       {
         TextView;
         id = "txtCallParticipantsCount";
-        text = "👥 1 Connected";
+        text = "👥 Connecting...";
         textSize = "13sp";
         textColor = "#B0BEC5";
         layout_weight = "1";
@@ -2027,7 +2227,7 @@ function showLiveCallModal()
       {
         TextView;
         id = "txtCallQuality";
-        text = "⚡ " .. callAudioQuality .. " Quality";
+        text = "⚡ WebRTC HD Opus";
         textSize = "12sp";
         textColor = "#FFD54F";
         Typeface = Typeface.DEFAULT_BOLD;
@@ -2098,6 +2298,9 @@ function showLiveCallModal()
 
   btnCallMuteWidget.onClick = function()
     isCallMicMuted = not isCallMicMuted
+    if headlessWebRTCWebView then
+      headlessWebRTCWebView.evaluateJavascript("window.setWebRTCMuted(" .. tostring(isCallMicMuted) .. ");", nil)
+    end
     if isCallMicMuted then
       btnCallMuteWidget.setText("🔇 Mic Muted")
       btnCallMuteWidget.setBackgroundColor(0xFFC2185B)
@@ -2107,12 +2310,13 @@ function showLiveCallModal()
       btnCallMuteWidget.setText("🎤 Mic On")
       btnCallMuteWidget.setBackgroundColor(0xFF00796B)
       btnCallMuteWidget.setContentDescription("Mute or unmute microphone button. Currently Unmuted.")
-      announce("Microphone unmuted. Speaking live.")
+      announce("Microphone unmuted. Speaking live over WebRTC.")
     end
   end
 
   btnCallSpeakerWidget.onClick = function()
     isCallSpeakerOn = not isCallSpeakerOn
+    setWebRTCSpeakerRoute(isCallSpeakerOn)
     if isCallSpeakerOn then
       btnCallSpeakerWidget.setText("🔊 Speaker")
       btnCallSpeakerWidget.setContentDescription("Toggle speakerphone and earpiece. Currently Speaker.")
@@ -2129,7 +2333,7 @@ function showLiveCallModal()
   end
 
   local builder = AlertDialog.Builder(activity)
-  builder.setTitle("Live Voice Session")
+  builder.setTitle("WebRTC Live Audio")
   builder.setView(dialogView)
   builder.setCancelable(false)
   activeCallDialog = builder.create()
@@ -2168,11 +2372,10 @@ function updateCallParticipantsList()
   local data = {}
   local count = 0
   for _, p in ipairs(callParticipants) do
-    if type(p) == "table" then
+    if type(p) == "table" or type(p) == "string" then
       count = count + 1
-      local uName = p.name or "User"
-      local isMuted = p.isMuted == true
-      local statusStr = isMuted and "🔇 Muted" or "🟢 Speaking"
+      local uName = type(p) == "table" and (p.name or "User") or p
+      local statusStr = "🟢 WebRTC Connected"
       if uName == currentUser.name then
         uName = uName .. " (You)"
         statusStr = isCallMicMuted and "🔇 Muted" or "🟢 Speaking"
@@ -2193,14 +2396,14 @@ function updateCallParticipantsList()
   end
   
   if txtCallParticipantsCount then
-    txtCallParticipantsCount.setText("👥 " .. count .. " Connected")
+    txtCallParticipantsCount.setText("👥 " .. count .. " Connected (WebRTC)")
   end
   
   local adapter = LuaAdapter(activity, data, itemLayout)
   listCallParticipantsWidget.setAdapter(adapter)
 end
 
-function startCallAudioLoops()
+function startWebRTCCallLoops()
   -- 1. Duration ticker loop
   local function ticker()
     if isCallActive then
@@ -2210,152 +2413,42 @@ function startCallAudioLoops()
       local timeFormatted = string.format("%02d:%02d", m, s)
       if txtCallTimerWidget then
         txtCallTimerWidget.setText(timeFormatted)
-        txtCallTimerWidget.setContentDescription("Call Duration " .. timeFormatted)
+        txtCallTimerWidget.setContentDescription("WebRTC Call Duration " .. timeFormatted)
       end
       Handler().postDelayed(Runnable{ run = ticker }, 1000)
     end
   end
   ticker()
 
-  -- 2. Audio transmission loop
-  transmitAudioBurst()
-
-  -- 3. Room status & audio receiver loop
-  pollCallRoomStatus()
+  -- 2. WebRTC Signaling Dispatcher Loop
+  pollWebRTCSignals()
 end
 
-function transmitAudioBurst()
-  if not isCallActive or isCallMicMuted or isCallChunkTransmitting then
-    if isCallActive then
-      Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 1000)
-    end
-    return
-  end
-  
-  isCallChunkTransmitting = true
-  import "android.media.MediaRecorder"
-  local chunkFile = getAppAudioDir() .. "/call_chunk_" .. os.time() .. ".3gp"
-  
-  local recOk = pcall(function()
-    activeCallRecorder = MediaRecorder()
-    activeCallRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-    activeCallRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-    if callAudioQuality == "HD" then
-      pcall(function()
-        activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_WB)
-        activeCallRecorder.setAudioSamplingRate(16000)
-      end)
-    else
-      activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-      activeCallRecorder.setAudioSamplingRate(8000)
-    end
-    activeCallRecorder.setOutputFile(chunkFile)
-    activeCallRecorder.prepare()
-    activeCallRecorder.start()
-  end)
-  
-  if recOk then
-    Handler().postDelayed(Runnable{
-      run = function()
-        pcall(function()
-          if activeCallRecorder then
-            activeCallRecorder.stop()
-            activeCallRecorder.release()
-            activeCallRecorder = nil
-          end
-        end)
-        
-        local b64 = encodeAudioFileToBase64(chunkFile)
-        pcall(function() File(chunkFile).delete() end)
-        
-        if b64 and b64 ~= "" and isCallActive and not isCallMicMuted then
-          local pkt = encodeJSON({
-            roomId = activeCallRoomId,
-            sender = currentUser.name,
-            audio = b64,
-            quality = callAudioQuality
-          })
-          Http.post(BACKEND_URL .. "/api/call/audio", pkt, function(c, r)
-            isCallChunkTransmitting = false
-            if isCallActive then
-              Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 300)
-            end
-          end)
-        else
-          isCallChunkTransmitting = false
-          if isCallActive then
-            Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 500)
-          end
-        end
-      end
-    }, 2000)
-  else
-    isCallChunkTransmitting = false
-    if isCallActive then
-      Handler().postDelayed(Runnable{ run = transmitAudioBurst }, 1000)
-    end
-  end
-end
-
-function pollCallRoomStatus()
+function pollWebRTCSignals()
   if not isCallActive then return end
   
-  Http.get(BACKEND_URL .. "/api/call/status?room=" .. activeCallRoomId .. "&t=" .. os.time(), function(code, content)
+  local signalUrl = BACKEND_URL .. "/api/webrtc/signals?room=" .. activeCallRoomId .. "&user=" .. currentUser.name .. "&t=" .. os.time()
+  Http.get(signalUrl, function(code, content)
     if isCallActive and code == 200 and content and content ~= "null" then
-      local data = decodeJSON(content)
-      if data and type(data) == "table" then
-        if type(data.participants) == "table" then
-          callParticipants = data.participants
-          updateCallParticipantsList()
-        end
-        
-        local latestAudio = data.latest_audio
-        if latestAudio and type(latestAudio) == "table" then
-          local seq = tonumber(latestAudio.seq or 0) or 0
-          local sender = latestAudio.sender or ""
-          if seq > lastPlayedAudioSeq and sender ~= currentUser.name and latestAudio.audio and latestAudio.audio ~= "" then
-            lastPlayedAudioSeq = seq
-            playIncomingCallAudioChunk(latestAudio.audio, sender)
-          end
+      local res = decodeJSON(content)
+      if res and res.signals and type(res.signals) == "table" and #res.signals > 0 then
+        if headlessWebRTCWebView then
+          local sigJson = encodeJSON(res.signals)
+          local jsCall = string.format("window.processRemoteSignals('%s');", sigJson:gsub("'", "\\'"))
+          headlessWebRTCWebView.evaluateJavascript(jsCall, nil)
         end
       end
     end
     
     if isCallActive then
-      Handler().postDelayed(Runnable{ run = pollCallRoomStatus }, 1500)
+      Handler().postDelayed(Runnable{ run = pollWebRTCSignals }, 800)
     end
   end)
 end
 
-function playIncomingCallAudioChunk(base64Audio, senderName)
-  local targetFile = getAppAudioDir() .. "/incoming_call_" .. os.time() .. ".3gp"
-  local ok = decodeBase64ToAudioFile(base64Audio, targetFile)
-  if ok then
-    pcall(function()
-      local player = MediaPlayer()
-      player.setDataSource(targetFile)
-      if isCallSpeakerOn then
-        player.setAudioStreamType(3) -- AudioManager.STREAM_MUSIC
-      else
-        player.setAudioStreamType(0) -- AudioManager.STREAM_VOICE_CALL
-      end
-      player.prepare()
-      player.start()
-      player.setOnCompletionListener(MediaPlayer.OnCompletionListener{
-        onCompletion = function(mp)
-          pcall(function()
-            mp.release()
-            File(targetFile).delete()
-          end)
-        end
-      })
-    end)
-  end
-end
-
 function initiatePrivate1on1Call(targetUser)
   if not targetUser or targetUser == "" then return end
-  announce("Calling " .. targetUser .. "...")
+  announce("Calling " .. targetUser .. " via WebRTC...")
   
   local cleanTarget = targetUser:gsub("^%s+", ""):gsub("%s+$", "")
   local cleanMe = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
@@ -2371,7 +2464,7 @@ function initiatePrivate1on1Call(targetUser)
   })
   Http.post(BACKEND_URL .. "/api/call/signal", callPayload, function() end)
   
-  startOrJoinVoiceCall(roomId, "private", "📞 Call: " .. cleanTarget, cleanTarget)
+  startOrJoinVoiceCall(roomId, "private", "📞 WebRTC Call: " .. cleanTarget, cleanTarget)
 end
 
 function checkIncomingCallSignals()
@@ -2391,28 +2484,36 @@ end
 
 function showIncomingCallDialog(callerName, targetRoom)
   if isCallActive then return end
-  announce("Incoming voice call from " .. callerName .. ". Double tap Accept to talk.")
+  announce("Incoming WebRTC voice call from " .. callerName .. ". Double tap Accept to connect.")
   
   local alertBuilder = AlertDialog.Builder(activity)
-  alertBuilder.setTitle("📞 Incoming Voice Call")
+  alertBuilder.setTitle("📞 Incoming WebRTC Call")
   alertBuilder.setMessage("User " .. callerName .. " is calling you.")
   alertBuilder.setPositiveButton("✅ Accept Call", DialogInterface.OnClickListener{
     onClick = function(d, w)
-      startOrJoinVoiceCall(targetRoom, "private", "📞 Call: " .. callerName, callerName)
+      local acceptPayload = encodeJSON({
+        action = "accept",
+        from = currentUser.name,
+        to = callerName,
+        roomId = targetRoom
+      })
+      Http.post(BACKEND_URL .. "/api/call/signal", acceptPayload, function() end)
+      startOrJoinVoiceCall(targetRoom, "private", "📞 WebRTC Call: " .. callerName, callerName)
     end
   })
   alertBuilder.setNegativeButton("❌ Decline", DialogInterface.OnClickListener{
     onClick = function(d, w)
-      local decPayload = encodeJSON({
+      local declinePayload = encodeJSON({
         action = "decline",
         from = currentUser.name,
         to = callerName,
         roomId = targetRoom
       })
-      Http.post(BACKEND_URL .. "/api/call/signal", decPayload, function() end)
+      Http.post(BACKEND_URL .. "/api/call/signal", declinePayload, function() end)
       announce("Call declined.")
     end
   })
+  alertBuilder.setCancelable(false)
   alertBuilder.show()
 end
 

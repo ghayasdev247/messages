@@ -236,10 +236,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.7.2",
-                "version_code": 57,
+                "version": "3.8.0",
+                "version_code": 58,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.7.2: Streamlined navigation by removing redundant Contacts/Online Users tab; centralized 1-on-1 messaging directly through Chats Inbox and 'New Chat' button."
+                "changelog": "Version 3.8.0: WebRTC Real-Time Voice Calling Engine (Zero-latency P2P for 1-on-1 private calls and Multi-Peer Mesh for Lounge Groups & Public Voice Stage)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

@@ -269,6 +269,144 @@ export default {
       }
 
       // ====================================================================
+      // 8B. WEBRTC REAL-TIME SIGNALING & PEER MESH ENGINE
+      // ====================================================================
+      
+      // WebRTC Signal Dispatcher (Offer, Answer, ICE Candidate)
+      if (path === "/api/webrtc/signal" && method === "POST") {
+        const body = await request.json();
+        const roomId = (body.roomId || "default_room").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const sender = (body.sender || "").trim();
+        const target = (body.target || "").trim();
+        const signalType = body.type; // "offer", "answer", "candidate", "bye"
+        const signalData = body.data || {};
+        
+        if (!sender || !target || !signalType) {
+          return new Response(JSON.stringify({ success: false, error: "Missing required signal parameters" }), { headers: CORS_HEADERS, status: 400 });
+        }
+
+        const targetKey = target.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const senderKey = sender.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const signalId = `sig_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+        const signalPayload = {
+          id: signalId,
+          roomId: roomId,
+          sender: sender,
+          target: target,
+          type: signalType,
+          data: signalData,
+          timestamp: Math.floor(Date.now() / 1000)
+        };
+
+        await fetch(`${FIREBASE_DB}/data/webrtc_signals/${roomId}/${targetKey}/${signalId}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(signalPayload)
+        });
+
+        return new Response(JSON.stringify({ success: true, signalId: signalId }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // WebRTC Signals Poller (Fetch & Clean Pending Signals for User)
+      if (path === "/api/webrtc/signals" && method === "GET") {
+        const roomId = (url.searchParams.get("room") || "").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const user = (url.searchParams.get("user") || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+        if (!roomId || !user) {
+          return new Response(JSON.stringify({ success: false, error: "Missing room or user parameter" }), { headers: CORS_HEADERS, status: 400 });
+        }
+
+        const res = await fetch(`${FIREBASE_DB}/data/webrtc_signals/${roomId}/${user}.json`);
+        const rawSignals = res.ok ? await res.json() : null;
+        let signalList = [];
+
+        if (rawSignals && typeof rawSignals === "object") {
+          signalList = Object.values(rawSignals);
+          // Clean consumed signals to prevent double-processing
+          await fetch(`${FIREBASE_DB}/data/webrtc_signals/${roomId}/${user}.json`, { method: "DELETE" });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          roomId: roomId,
+          signals: signalList,
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+            { urls: "stun:stun.cloudflare.com:3478" }
+          ]
+        }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // WebRTC Room Join & Peer Discovery
+      if (path === "/api/webrtc/room/join" && method === "POST") {
+        const body = await request.json();
+        const roomId = (body.roomId || "default_room").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const username = (body.username || "").trim();
+        const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const nowSec = Math.floor(Date.now() / 1000);
+
+        if (!username) {
+          return new Response(JSON.stringify({ success: false, error: "Missing username" }), { headers: CORS_HEADERS, status: 400 });
+        }
+
+        // Register peer in room
+        await fetch(`${FIREBASE_DB}/data/webrtc_rooms/${roomId}/peers/${userKey}.json`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: username,
+            joined_at: nowSec,
+            last_ping: nowSec
+          })
+        });
+
+        // Get list of existing peers in room
+        const peersRes = await fetch(`${FIREBASE_DB}/data/webrtc_rooms/${roomId}/peers.json`);
+        const rawPeers = peersRes.ok ? await peersRes.json() : {};
+        let activePeers = [];
+
+        if (rawPeers && typeof rawPeers === "object") {
+          for (const key in rawPeers) {
+            const peer = rawPeers[key];
+            if (peer && typeof peer === "object" && peer.name) {
+              if (nowSec - Number(peer.last_ping || 0) <= 45 && peer.name !== username) {
+                activePeers.push(peer.name);
+              }
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          roomId: roomId,
+          peers: activePeers,
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" }
+          ]
+        }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // WebRTC Room Leave
+      if (path === "/api/webrtc/room/leave" && method === "POST") {
+        const body = await request.json();
+        const roomId = (body.roomId || "").replace(/[^a-zA-Z0-9_-]/g, "_");
+        const username = (body.username || "").trim();
+        const userKey = username.toLowerCase().replace(/[^a-z0-9]/g, "_");
+
+        if (roomId && userKey) {
+          await fetch(`${FIREBASE_DB}/data/webrtc_rooms/${roomId}/peers/${userKey}.json`, { method: "DELETE" });
+          await fetch(`${FIREBASE_DB}/data/webrtc_signals/${roomId}/${userKey}.json`, { method: "DELETE" });
+        }
+
+        return new Response(JSON.stringify({ success: true }), { headers: CORS_HEADERS, status: 200 });
+      }
+
+      // ====================================================================
       // 9. FEEDBACK & MESSAGING PIPELINE
       // ====================================================================
 
