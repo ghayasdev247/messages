@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.13.1"
-local APP_VERSION_CODE = 73
+local APP_VERSION = "3.13.2"
+local APP_VERSION_CODE = 74
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -217,6 +217,9 @@ function encodeJSON(val)
     end
   end
   
+  return serialize(val)
+end
+
 function urlEncode(str)
   if not str then return "" end
   str = tostring(str)

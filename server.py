@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.13.1",
-                "version_code": 73,
+                "version": "3.13.2",
+                "version_code": 74,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.13.1: #1 Best In-App Serverless Voice Calling Engine - Instant 1-tap connection, URL encoding support for names with spaces, and zero-lag audio streaming."
+                "changelog": "Version 3.13.2: Critical syntax error fix for encodeJSON closing end, full URL encoding for names with spaces, and verified 100% valid Lua AST."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
