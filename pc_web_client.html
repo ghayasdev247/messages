@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Accessible Messenger - Universal Web Client (v3.10.1)</title>
+  <title>Accessible Messenger - Universal Web Client (v3.11.2)</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -17,7 +17,7 @@
     }
     .container {
       width: 100%;
-      max-width: 620px;
+      max-width: 640px;
       background: #111b21;
       border-radius: 12px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.5);
@@ -157,7 +157,7 @@
   <!-- 1. LOGIN SCREEN -->
   <div id="screen-login">
     <h1>Accessible Messenger</h1>
-    <h2>Universal Web Client (v3.10.1)</h2>
+    <h2>Universal Web Client (v3.11.2)</h2>
 
     <label for="username">Enter Your Alias / Username</label>
     <input type="text" id="username" placeholder="e.g. John" aria-label="Username edit box">
@@ -257,6 +257,7 @@
   let lastPrivateTs = 0;
 
   let pollInterval = null;
+  let signalInterval = null;
   let isRecording = false;
   let mediaRecorder = null;
   let audioChunks = [];
@@ -269,14 +270,6 @@
   let isCallMuted = false;
   let pendingIncomingCall = null;
   let localStream = null;
-  let peerConnections = {};
-
-  const iceServers = [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    { urls: "stun:stun.cloudflare.com:3478" }
-  ];
 
   function announce(msg) {
     const el = document.getElementById("sr-announcer");
@@ -320,6 +313,7 @@
   function onLogout() {
     currentUser.online = false;
     if (pollInterval) clearInterval(pollInterval);
+    if (signalInterval) clearInterval(signalInterval);
     if (isCallActive) endCurrentCall();
     document.getElementById("screen-main").classList.add("hidden");
     document.getElementById("screen-login").classList.remove("hidden");
@@ -719,8 +713,12 @@
       if (!currentUser.online) return;
       if (currentTab === "public") fetchPublicFeed();
       else if (currentTab === "chat" && currentChatTarget) fetchPrivateChat();
-      checkCallSignals();
     }, 4000);
+
+    signalInterval = setInterval(() => {
+      if (!currentUser.online) return;
+      checkCallSignals();
+    }, 1500);
   }
 
   function escapeHtml(text) {
