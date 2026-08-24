@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.12.0"
-local APP_VERSION_CODE = 70
+local APP_VERSION = "3.12.1"
+local APP_VERSION_CODE = 71
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2056,29 +2056,38 @@ local function isSenderMe(sender)
 end
 
 function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
-  if not roomId or roomId == "" then roomId = "public_stage" end
+  if isCallActive then
+    announce("Already in an active call room.")
+    return
+  end
+  
+  isCallActive = true
+  activeCallRoomId = roomId or "public_stage"
+  activeCallType = callType or "public"
   if targetUser and targetUser ~= "" then activeChatTarget = targetUser end
   activeCallTitle = callTitle or "Live Voice Call"
+  isCallMicMuted = false
+  isCallSpeakerOn = true
+  callDurationTimer = 0
+  lastPlayedAudioSeq = (os.time() * 1000)
+  isCallChunkTransmitting = false
+  activeCallRecipientAccepted = (activeCallType ~= "private")
+  callParticipants = { { name = currentUser.name, isOnline = true } }
   
-  local cleanRoom = "AccessibleMessenger_" .. roomId:gsub("[^a-zA-Z0-9_]", "_")
-  local cleanUser = (currentUser.name or "User"):gsub("[^a-zA-Z0-9_]", "_")
-  local jitsiUrl = "https://meet.jit.si/" .. cleanRoom .. "#config.startWithVideoMuted=true&config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.disableDeepLinking=false&userInfo.displayName=" .. cleanUser
+  pcall(function() setCallSpeakerRoute(true) end)
+  announce(activeCallTitle .. " active.")
   
-  announce("Connecting to " .. activeCallTitle .. " on HD Voice Room...")
+  -- 1. Open in-app call modal
+  showLiveCallModal()
+  updateCallParticipantsList()
   
-  -- Launch HD Voice Room
-  pcall(function()
-    import "android.content.Intent"
-    import "android.net.Uri"
-    local intent = Intent(Intent.ACTION_VIEW, Uri.parse(jitsiUrl))
-    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    activity.startActivity(intent)
-  end)
+  -- 2. Start audio streaming & polling loops
+  startLiveCallLoops()
   
-  -- Notify server
+  -- 3. Notify backend
   pcall(function()
     local joinPayload = encodeJSON({
-      roomId = roomId,
+      roomId = activeCallRoomId,
       username = currentUser.name,
       isMuted = false,
       quality = "HD"

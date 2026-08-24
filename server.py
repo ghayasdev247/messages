@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.12.0",
-                "version_code": 70,
+                "version": "3.12.1",
+                "version_code": 71,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.12.0: Connected global Jitsi HD Voice Calling Gateway with instant zero-lag audio rooms, automatic noise cancellation, and seamless cross-platform Web & Android calling."
+                "changelog": "Version 3.12.1: 100% Native In-App Voice Engine restored directly inside Accessible Messenger (Live microphone capture, ultra-low latency chunk streaming, full in-app controls)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
