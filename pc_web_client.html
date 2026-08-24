@@ -610,28 +610,25 @@
     startOrJoinVoiceRoom(roomId, `1-on-1 Call with ${currentChatTarget}`, "private");
   }
 
-  async function startOrJoinVoiceRoom(roomId, title, type) {
-    if (isCallActive) return;
+  function startOrJoinVoiceRoom(roomId, title, type) {
+    if (!roomId) roomId = "public_stage";
     isCallActive = true;
     activeCallRoomId = roomId;
     activeCallType = type || "public";
     activeCallTimer = 0;
-    isCallMuted = false;
-    lastPlayedAudioSeq = Date.now();
-    isCallChunkSending = false;
+
+    const cleanRoom = "AccessibleMessenger_" + roomId.replace(/[^a-zA-Z0-9_]/g, "_");
+    const cleanUser = encodeURIComponent(currentUser.name || "User");
+    const jitsiUrl = `https://meet.jit.si/${cleanRoom}#config.startWithVideoMuted=true&config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.disableDeepLinking=false&userInfo.displayName=${cleanUser}`;
+
+    announce(`Connecting to ${title} on HD Voice Room...`);
+    window.open(jitsiUrl, "_blank");
 
     document.getElementById("active-call-box").classList.remove("hidden");
     document.getElementById("call-box-title").innerText = `📞 ${title}`;
-    document.getElementById("call-box-sub").innerText = (activeCallType === "private") ? "📞 Ringing..." : "🟢 Connected (Live)";
-    announce(`Joining ${title}...`);
+    document.getElementById("call-box-sub").innerHTML = `🟢 Voice Room Active | <a href="${jitsiUrl}" target="_blank" style="color:#25d366; text-decoration:underline; font-weight:bold;">🔗 Click here to Re-open Audio Room</a>`;
 
-    try {
-      callMediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      startAudioTransmissionLoop();
-    } catch(e) {
-      announce("Microphone access failed. Please allow microphone permissions.");
-    }
-
+    if (callTimerInterval) clearInterval(callTimerInterval);
     callTimerInterval = setInterval(() => {
       activeCallTimer++;
       const m = Math.floor(activeCallTimer / 60).toString().padStart(2, '0');
@@ -639,15 +636,11 @@
       document.getElementById("call-box-timer").innerText = `${m}:${s}`;
     }, 1000);
 
-    // Join room on backend
     fetch(`${BACKEND_URL}/api/call/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ roomId: roomId, username: currentUser.name, isMuted: false })
     });
-
-    // Start Audio Receiver & Room Status Poller (every 700ms)
-    startAudioReceiverLoop();
   }
 
   function startAudioTransmissionLoop() {

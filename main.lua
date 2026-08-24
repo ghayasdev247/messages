@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.11.4"
-local APP_VERSION_CODE = 69
+local APP_VERSION = "3.12.0"
+local APP_VERSION_CODE = 70
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2056,76 +2056,35 @@ local function isSenderMe(sender)
 end
 
 function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
-  if isCallActive then
-    announce("Already in an active call room.")
-    return
-  end
-  
-  isCallActive = true
-  activeCallRoomId = roomId
-  activeCallType = callType
+  if not roomId or roomId == "" then roomId = "public_stage" end
   if targetUser and targetUser ~= "" then activeChatTarget = targetUser end
   activeCallTitle = callTitle or "Live Voice Call"
-  isCallMicMuted = false
-  isCallSpeakerOn = true
-  callDurationTimer = 0
-  lastPlayedAudioSeq = (os.time() * 1000)
-  isCallChunkTransmitting = false
-  activeCallRecipientAccepted = (callType ~= "private")
-  callParticipants = { { name = currentUser.name, isOnline = true } }
   
-  pcall(function() setCallSpeakerRoute(true) end)
-  callAudioDiagAnnounced = false
-  announce("Starting call, please wait.")
+  local cleanRoom = "AccessibleMessenger_" .. roomId:gsub("[^a-zA-Z0-9_]", "_")
+  local cleanUser = (currentUser.name or "User"):gsub("[^a-zA-Z0-9_]", "_")
+  local jitsiUrl = "https://meet.jit.si/" .. cleanRoom .. "#config.startWithVideoMuted=true&config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.disableDeepLinking=false&userInfo.displayName=" .. cleanUser
   
-  -- Step 1: Open the call dialog
-  local modalOk, modalErr = pcall(function()
-    showLiveCallModal()
+  announce("Connecting to " .. activeCallTitle .. " on HD Voice Room...")
+  
+  -- Launch HD Voice Room
+  pcall(function()
+    import "android.content.Intent"
+    import "android.net.Uri"
+    local intent = Intent(Intent.ACTION_VIEW, Uri.parse(jitsiUrl))
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    activity.startActivity(intent)
   end)
-  if not modalOk then
-    announce("Error opening call screen: " .. tostring(modalErr))
-  end
   
-  -- Step 2: Update participants display
-  pcall(function() updateCallParticipantsList() end)
-  
-  -- Step 3: Start audio loops
-  local loopsOk, loopsErr = pcall(function()
-    startLiveCallLoops()
-  end)
-  if not loopsOk then
-    announce("Error starting audio engine: " .. tostring(loopsErr))
-  end
-  
-  -- Step 4: Notify server (non-blocking)
+  -- Notify server
   pcall(function()
     local joinPayload = encodeJSON({
-      roomId = activeCallRoomId,
+      roomId = roomId,
       username = currentUser.name,
       isMuted = false,
       quality = "HD"
     })
-    Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function(code, res)
-      if code == 200 then
-        announce("Call connected successfully.")
-      else
-        announce("Server returned code " .. tostring(code))
-      end
-    end)
+    Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function() end)
   end)
-  
-  -- Step 5: Announce connection after 3 seconds
-  Handler().postDelayed(Runnable{
-    run = function()
-      if isCallActive then
-        if activeCallType == "private" and not activeCallRecipientAccepted then
-          announce("Ringing " .. (activeChatTarget or "User") .. ". Waiting for answer.")
-        else
-          announce("You are live in the call. " .. #callParticipants .. " participants.")
-        end
-      end
-    end
-  }, 3000)
 end
 
 function leaveActiveVoiceCall()
