@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.14.3",
-                "version_code": 79,
+                "version": "3.14.4",
+                "version_code": 80,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.14.3: Fixed Firebase HTTP aggressive caching which kept the call screen stuck on 'Connecting...' forever."
+                "changelog": "Version 3.14.4: Fixed WebRTC Voice Audio issue (audio routing and JS SDP parsing)."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

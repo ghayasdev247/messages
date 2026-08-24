@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.3"
-local APP_VERSION_CODE = 79
+local APP_VERSION = "3.14.4"
+local APP_VERSION_CODE = 80
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2074,6 +2074,16 @@ local activeCallRecipientAccepted = false
 local rtcWebView = nil
 local processedSignalKeys = {}
 
+local function escapeForJS(str)
+  if not str then return "" end
+  local s = tostring(str)
+  s = s:gsub("\\\\", "\\\\\\\\")
+  s = s:gsub("'", "\\\\'")
+  s = s:gsub("\\n", "\\\\n")
+  s = s:gsub("\\r", "\\\\r")
+  return s
+end
+
 local function cleanFirebaseKey(name)
   if not name then return "anonymous" end
   local k = string.lower(tostring(name):gsub("^%s+", ""):gsub("%s+$", "")):gsub("[^%w]", "_")
@@ -2394,7 +2404,8 @@ function startWebRTCSignalingPoll()
             if not processedSignalKeys["offer"] then
               processedSignalKeys["offer"] = true
               if rtcWebView then
-                rtcWebView.evaluateJavascript("receiveSignal(" .. encodeJSON(data.offer) .. ");", nil)
+                local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.offer)))
+                rtcWebView.evaluateJavascript(js, nil)
               end
             end
           end
@@ -2403,7 +2414,8 @@ function startWebRTCSignalingPoll()
             if not processedSignalKeys["answer"] then
               processedSignalKeys["answer"] = true
               if rtcWebView then
-                rtcWebView.evaluateJavascript("receiveSignal(" .. encodeJSON(data.answer) .. ");", nil)
+                local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.answer)))
+                rtcWebView.evaluateJavascript(js, nil)
               end
             end
           end
@@ -2413,7 +2425,8 @@ function startWebRTCSignalingPoll()
               if type(cand) == "table" and cand.sender ~= currentUser.name and not processedSignalKeys[cKey] then
                 processedSignalKeys[cKey] = true
                 if rtcWebView then
-                  rtcWebView.evaluateJavascript("receiveSignal(" .. encodeJSON(cand) .. ");", nil)
+                  local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(cand)))
+                  rtcWebView.evaluateJavascript(js, nil)
                 end
               end
             end
@@ -2535,7 +2548,11 @@ function setCallSpeakerRoute(isSpeaker)
     import "android.content.Context"
     local am = activity.getSystemService(Context.AUDIO_SERVICE)
     if am then
-      am.setMode(AudioManager.MODE_IN_COMMUNICATION)
+      if activeCallMode == "webrtc" then
+        am.setMode(AudioManager.MODE_NORMAL) -- Let WebView handle WebRTC routing internally
+      else
+        am.setMode(AudioManager.MODE_IN_COMMUNICATION)
+      end
       am.setSpeakerphoneOn(isSpeaker)
     end
   end)
