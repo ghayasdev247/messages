@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.1"
-local APP_VERSION_CODE = 77
+local APP_VERSION = "3.14.2"
+local APP_VERSION_CODE = 78
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2048,7 +2048,7 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGrou
 end
 
 -- --------------------------------------------------------------------
--- 📞 HYBRID VOICE CALL ENGINE (WEBRTC + CHUNKING)
+-- 📞 DIRECT FIREBASE HYBRID VOICE CALL & WEBRTC REAL-TIME ENGINE
 -- --------------------------------------------------------------------
 local isCallActive = false
 local activeCallRoomId = ""
@@ -2072,6 +2072,13 @@ local btnCallMuteWidget = nil
 local btnCallSpeakerWidget = nil
 local activeCallRecipientAccepted = false
 local rtcWebView = nil
+local processedSignalKeys = {}
+
+local function cleanFirebaseKey(name)
+  if not name then return "anonymous" end
+  local k = string.lower(tostring(name):gsub("^%s+", ""):gsub("%s+$", "")):gsub("[^%w]", "_")
+  return (k ~= "") and k or "anonymous"
+end
 
 local function isSenderMe(sender)
   if not sender or not currentUser.name then return false end
@@ -2082,15 +2089,15 @@ end
 
 function promptCallModeSelection(title, onSelectCallback)
   local modes = {
-    "1. Media Record Mode (Legacy, 2-sec Audio Chunks)",
-    "2. WebRTC Mode (True Real-Time Low Latency)"
+    "1. WebRTC Mode (True Real-Time Low Latency)",
+    "2. Media Record Mode (Legacy, 2-sec Audio Chunks)"
   }
   
   local builder = AlertDialog.Builder(activity)
   builder.setTitle(title or "Select Voice Call Mode")
   builder.setItems(modes, DialogInterface.OnClickListener{
     onClick = function(dialog, which)
-      local selectedMode = (which == 0) and "chunk" or "webrtc"
+      local selectedMode = (which == 0) and "webrtc" or "chunk"
       if onSelectCallback then
         onSelectCallback(selectedMode)
       end
@@ -2119,32 +2126,36 @@ function startOrJoinVoiceCall(roomId, callType, callTitle, targetUser, callMode,
   isCallChunkTransmitting = false
   activeCallRecipientAccepted = (activeCallType ~= "private")
   callParticipants = { { name = currentUser.name, isOnline = true } }
+  processedSignalKeys = {}
   
   pcall(function() setCallSpeakerRoute(true) end)
-  announce(activeCallTitle .. " active in " .. (activeCallMode == "webrtc" and "WebRTC Real-Time" or "Media Record Chunk") .. " Mode.")
+  local modeLabel = (activeCallMode == "webrtc") and "WebRTC Real-Time" or "Media Record Chunk"
+  announce(activeCallTitle .. " active in " .. modeLabel .. " Mode.")
   
   -- 1. Open in-app call modal
   showLiveCallModal()
   updateCallParticipantsList()
   
-  -- 2. Start audio streaming / WebRTC session
+  -- 2. Join Firebase Room Presence
+  pcall(function()
+    local myKey = cleanFirebaseKey(currentUser.name)
+    local presenceUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. "/participants/" .. myKey .. ".json"
+    local pData = encodeJSON({
+      name = currentUser.name,
+      joined_at = os.time(),
+      last_seen = os.time(),
+      isMuted = false,
+      mode = activeCallMode
+    })
+    Http.put(presenceUrl, pData, function() end)
+  end)
+  
+  -- 3. Start audio streaming / WebRTC session
   if activeCallMode == "webrtc" then
     startWebRTCSession(isCaller == true)
   else
     startLiveCallLoops()
   end
-  
-  -- 3. Notify backend
-  pcall(function()
-    local joinPayload = encodeJSON({
-      roomId = activeCallRoomId,
-      username = currentUser.name,
-      mode = activeCallMode,
-      isMuted = false,
-      quality = (activeCallMode == "webrtc") and "WebRTC-HD" or "Chunk-HD"
-    })
-    Http.post(BACKEND_URL .. "/api/call/join", joinPayload, function() end)
-  end)
 end
 
 function startWebRTCSession(isCaller)
@@ -2181,7 +2192,7 @@ function startWebRTCSession(isCaller)
           pcall(function()
             local sigData = decodeJSON(payloadStr)
             if sigData then
-              sendWebRTCSignalToCloud(sigData)
+              sendWebRTCSignalToFirebase(sigData)
             end
           end)
           result.confirm("OK")
@@ -2207,7 +2218,8 @@ function startWebRTCSession(isCaller)
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
     ]
   };
 
@@ -2267,7 +2279,7 @@ function startWebRTCSession(isCaller)
       const data = typeof rawSignal === 'string' ? JSON.parse(rawSignal) : rawSignal;
       if (!data || data.sender === myUser) return;
 
-      if (data.type === 'offer') {
+      if (data.type === 'offer' && myRole !== 'caller') {
         await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -2278,7 +2290,9 @@ function startWebRTCSession(isCaller)
           room: activeRoom
         }));
       } else if (data.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        if (pc.signalingState === "have-local-offer") {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        }
       } else if (data.type === 'candidate' && data.candidate) {
         await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
       }
@@ -2295,9 +2309,7 @@ function startWebRTCSession(isCaller)
 
   function stopCall() {
     if (localStream) {
-      localStream.getTracks().forEach(t => {
-        t.stop();
-      });
+      localStream.getTracks().forEach(t => { t.stop(); });
       localStream = null;
     }
     if (pc) {
@@ -2326,7 +2338,7 @@ function startWebRTCSession(isCaller)
           end
         end)
       end
-    }, 600)
+    }, 500)
   end)
   
   -- Duration ticker loop
@@ -2345,41 +2357,99 @@ function startWebRTCSession(isCaller)
   end
   ticker()
   
-  -- Cloud WebRTC signaling poll loop
+  -- Cloud WebRTC signaling & room presence poll loop
   startWebRTCSignalingPoll()
 end
 
-function sendWebRTCSignalToCloud(sigData)
+function sendWebRTCSignalToFirebase(sigData)
   if not sigData or not activeCallRoomId or activeCallRoomId == "" then return end
   pcall(function()
-    local sigUrl = FIREBASE_URL .. "/webrtc_signals/" .. activeCallRoomId .. "/" .. os.time() .. "_" .. math.random(1000, 9999) .. ".json"
-    Http.put(sigUrl, encodeJSON(sigData), function() end)
+    if sigData.type == "offer" then
+      local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. "/offer.json"
+      Http.put(sigUrl, encodeJSON(sigData), function() end)
+    elseif sigData.type == "answer" then
+      local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. "/answer.json"
+      Http.put(sigUrl, encodeJSON(sigData), function() end)
+    elseif sigData.type == "candidate" then
+      local myKey = cleanFirebaseKey(currentUser.name)
+      local candKey = myKey .. "_" .. os.time() .. "_" .. math.random(100, 999)
+      local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. "/candidates/" .. candKey .. ".json"
+      Http.put(sigUrl, encodeJSON(sigData), function() end)
+    end
   end)
 end
 
 function startWebRTCSignalingPoll()
   if not isCallActive or activeCallMode ~= "webrtc" then return end
   
-  local pollUrl = FIREBASE_URL .. "/webrtc_signals/" .. activeCallRoomId .. ".json"
-  Http.get(pollUrl, function(code, content)
+  -- 1. Poll WebRTC Signals from Firebase
+  local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. ".json"
+  Http.get(sigUrl, function(code, content)
     if isCallActive and activeCallMode == "webrtc" and code == 200 and content and content ~= "null" then
       pcall(function()
-        local signalsObj = decodeJSON(content)
-        if type(signalsObj) == "table" then
-          for k, sig in pairs(signalsObj) do
-            if type(sig) == "table" and sig.sender ~= currentUser.name then
-              local sigStr = encodeJSON(sig)
+        local data = decodeJSON(content)
+        if type(data) == "table" then
+          -- Process Offer
+          if data.offer and type(data.offer) == "table" and data.offer.sender ~= currentUser.name then
+            if not processedSignalKeys["offer"] then
+              processedSignalKeys["offer"] = true
               if rtcWebView then
-                rtcWebView.evaluateJavascript("receiveSignal(" .. sigStr .. ");", nil)
+                rtcWebView.evaluateJavascript("receiveSignal(" .. encodeJSON(data.offer) .. ");", nil)
+              end
+            end
+          end
+          -- Process Answer
+          if data.answer and type(data.answer) == "table" and data.answer.sender ~= currentUser.name then
+            if not processedSignalKeys["answer"] then
+              processedSignalKeys["answer"] = true
+              if rtcWebView then
+                rtcWebView.evaluateJavascript("receiveSignal(" .. encodeJSON(data.answer) .. ");", nil)
+              end
+            end
+          end
+          -- Process Candidates
+          if data.candidates and type(data.candidates) == "table" then
+            for cKey, cand in pairs(data.candidates) do
+              if type(cand) == "table" and cand.sender ~= currentUser.name and not processedSignalKeys[cKey] then
+                processedSignalKeys[cKey] = true
+                if rtcWebView then
+                  rtcWebView.evaluateJavascript("receiveSignal(" .. encodeJSON(cand) .. ");", nil)
+                end
               end
             end
           end
         end
       end)
     end
+  end)
+  
+  -- 2. Poll Room Presence from Firebase (to update participants & mark connected)
+  local roomUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json"
+  Http.get(roomUrl, function(rCode, rContent)
+    if isCallActive and rCode == 200 and rContent and rContent ~= "null" then
+      pcall(function()
+        local roomData = decodeJSON(rContent)
+        if roomData and roomData.participants and type(roomData.participants) == "table" then
+          local parts = {}
+          local pCount = 0
+          for pKey, pInfo in pairs(roomData.participants) do
+            if type(pInfo) == "table" and pInfo.name then
+              table.insert(parts, pInfo)
+              pCount = pCount + 1
+            end
+          end
+          callParticipants = parts
+          if pCount >= 2 and not activeCallRecipientAccepted then
+            activeCallRecipientAccepted = true
+            announce("Call connected with " .. (activeChatTarget or "User") .. " on WebRTC.")
+          end
+          updateCallParticipantsList()
+        end
+      end)
+    end
     
     if isCallActive and activeCallMode == "webrtc" then
-      Handler().postDelayed(Runnable{ run = startWebRTCSignalingPoll }, 800)
+      Handler().postDelayed(Runnable{ run = startWebRTCSignalingPoll }, 700)
     end
   end)
 end
@@ -2410,36 +2480,37 @@ function leaveActiveVoiceCall()
   -- 3. Reset AudioManager to NORMAL mode FIRST
   resetAudioToNormalMode()
   
-  -- 4. Clean up Firebase WebRTC signals
+  -- 4. Clean up Firebase Room Presence & WebRTC signals
   pcall(function()
     if activeCallRoomId and activeCallRoomId ~= "" then
-      Http.delete(FIREBASE_URL .. "/webrtc_signals/" .. activeCallRoomId .. ".json", function() end)
+      local myKey = cleanFirebaseKey(currentUser.name)
+      Http.delete(FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. "/participants/" .. myKey .. ".json", function() end)
+      if activeCallType == "private" then
+        Http.delete(FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. ".json", function() end)
+        Http.delete(FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json", function() end)
+      end
     end
   end)
   
-  -- 5. Send leave notification (fire-and-forget)
-  pcall(function()
-    local leavePayload = encodeJSON({
-      roomId = activeCallRoomId,
-      username = currentUser.name
-    })
-    Http.post(BACKEND_URL .. "/api/call/leave", leavePayload, function() end)
-  end)
-  
-  -- 6. Send end signal for private calls
+  -- 5. Send end signal for private calls via Firebase
   if activeCallType == "private" and activeChatTarget and activeChatTarget ~= "" then
     pcall(function()
+      local targetKey = cleanFirebaseKey(activeChatTarget)
       local endPayload = encodeJSON({
         action = "end",
         from = currentUser.name,
         to = activeChatTarget,
-        roomId = activeCallRoomId
+        roomId = activeCallRoomId,
+        timestamp = os.time()
       })
-      Http.post(BACKEND_URL .. "/api/call/signal", endPayload, function() end)
+      Http.put(FIREBASE_URL .. "/data/call_signals/" .. targetKey .. ".json", endPayload, function() end)
+      -- Clear own signal
+      local myKey = cleanFirebaseKey(currentUser.name)
+      Http.delete(FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json", function() end)
     end)
   end
   
-  -- 7. Dismiss dialog safely on UI thread
+  -- 6. Dismiss dialog safely on UI thread
   local dialogRef = activeCallDialog
   activeCallDialog = nil
   if dialogRef then
@@ -2450,7 +2521,7 @@ function leaveActiveVoiceCall()
     end)
   end
   
-  -- 8. Announce AFTER audio mode is restored
+  -- 7. Announce AFTER audio mode is restored
   Handler().postDelayed(Runnable{
     run = function()
       announce("Call ended.")
@@ -2944,15 +3015,17 @@ function pollLiveCallRoomStatus()
         end
       end)
       
-      -- Check private call signals
+      -- Check private call signals directly from Firebase
       if isCallActive and activeCallType == "private" then
         pcall(function()
-          Http.get(BACKEND_URL .. "/api/call/signal?user=" .. urlEncode(currentUser.name) .. "&t=" .. os.time(), function(sigCode, sigContent)
+          local myKey = cleanFirebaseKey(currentUser.name)
+          local sigUrl = FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json?t=" .. os.time()
+          Http.get(sigUrl, function(sigCode, sigContent)
             pcall(function()
               if isCallActive and sigCode == 200 and sigContent and sigContent ~= "null" then
-                local sigRes = decodeJSON(sigContent)
-                if sigRes and sigRes.signal and type(sigRes.signal) == "table" then
-                  local act = sigRes.signal.action
+                local sigObj = decodeJSON(sigContent)
+                if sigObj and type(sigObj) == "table" then
+                  local act = sigObj.action
                   if act == "accept" and not activeCallRecipientAccepted then
                     activeCallRecipientAccepted = true
                     pcall(function() updateCallParticipantsList() end)
@@ -3015,15 +3088,24 @@ function initiatePrivate1on1Call(targetUser)
   activeChatTarget = cleanTarget
   
   promptCallModeSelection("Call " .. cleanTarget, function(selectedMode)
-    announce("Calling " .. cleanTarget .. " in " .. (selectedMode == "webrtc" and "WebRTC Real-Time" or "Media Record") .. " Mode...")
+    local modeLabel = (selectedMode == "webrtc") and "WebRTC Real-Time" or "Media Record"
+    announce("Calling " .. cleanTarget .. " in " .. modeLabel .. " Mode...")
+    
     local callPayload = encodeJSON({
       action = "call",
       from = cleanMe,
       to = cleanTarget,
       roomId = roomId,
-      mode = selectedMode
+      mode = selectedMode,
+      timestamp = os.time()
     })
+    
+    -- Send signal directly to Firebase
+    local targetKey = cleanFirebaseKey(cleanTarget)
+    Http.put(FIREBASE_URL .. "/data/call_signals/" .. targetKey .. ".json", callPayload, function() end)
+    -- Also send to Cloudflare Worker
     Http.post(BACKEND_URL .. "/api/call/signal", callPayload, function() end)
+    
     startOrJoinVoiceCall(roomId, "private", "📞 Calling: " .. cleanTarget, cleanTarget, selectedMode, true)
   end)
 end
@@ -3034,28 +3116,25 @@ local incomingCallDialogRef = nil
 function checkIncomingCallSignals()
   if isCallActive or not currentUser.name or currentUser.name == "" then return end
   
-  Http.get(BACKEND_URL .. "/api/call/signal?user=" .. urlEncode(currentUser.name) .. "&t=" .. os.time(), function(code, content)
+  local myKey = cleanFirebaseKey(currentUser.name)
+  local sigUrl = FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json?t=" .. os.time()
+  
+  Http.get(sigUrl, function(code, content)
     if code == 200 and content and content ~= "null" then
-      local res = decodeJSON(content)
-      if res and res.signal and type(res.signal) == "table" then
-        if res.signal.action == "call" and res.signal.from ~= currentUser.name then
-          local callerName = res.signal.from
-          local targetRoom = res.signal.roomId
-          local callMode = res.signal.mode or "webrtc"
+      local signal = decodeJSON(content)
+      if signal and type(signal) == "table" then
+        if signal.action == "call" and signal.from ~= currentUser.name then
+          local callerName = signal.from
+          local targetRoom = signal.roomId
+          local callMode = signal.mode or "webrtc"
           showIncomingCallDialog(callerName, targetRoom, callMode)
-        elseif res.signal.action == "end" or res.signal.action == "decline" then
+        elseif signal.action == "end" or signal.action == "decline" then
           if isIncomingCallDialogShowing and incomingCallDialogRef then
             pcall(function() incomingCallDialogRef.dismiss() end)
             incomingCallDialogRef = nil
             isIncomingCallDialogShowing = false
             announce("Caller ended the call.")
           end
-        end
-      else
-        if isIncomingCallDialogShowing and incomingCallDialogRef then
-          pcall(function() incomingCallDialogRef.dismiss() end)
-          incomingCallDialogRef = nil
-          isIncomingCallDialogShowing = false
         end
       end
     end
@@ -3080,14 +3159,25 @@ function showIncomingCallDialog(callerName, targetRoom, callMode)
       onClick = function(d, w)
         isIncomingCallDialogShowing = false
         incomingCallDialogRef = nil
+        
         local acceptPayload = encodeJSON({
           action = "accept",
           from = currentUser.name,
           to = callerName,
           roomId = targetRoom,
-          mode = callMode
+          mode = callMode,
+          timestamp = os.time()
         })
+        
+        -- Send accept signal to caller directly via Firebase
+        local callerKey = cleanFirebaseKey(callerName)
+        Http.put(FIREBASE_URL .. "/data/call_signals/" .. callerKey .. ".json", acceptPayload, function() end)
+        -- Clear my incoming signal
+        local myKey = cleanFirebaseKey(currentUser.name)
+        Http.delete(FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json", function() end)
+        -- Also send to Cloudflare Worker
         Http.post(BACKEND_URL .. "/api/call/signal", acceptPayload, function() end)
+        
         startOrJoinVoiceCall(targetRoom, "private", "📞 Call: " .. callerName, callerName, callMode, false)
       end
     })
@@ -3095,12 +3185,19 @@ function showIncomingCallDialog(callerName, targetRoom, callMode)
       onClick = function(d, w)
         isIncomingCallDialogShowing = false
         incomingCallDialogRef = nil
+        
         local declinePayload = encodeJSON({
           action = "decline",
           from = currentUser.name,
           to = callerName,
-          roomId = targetRoom
+          roomId = targetRoom,
+          timestamp = os.time()
         })
+        
+        local callerKey = cleanFirebaseKey(callerName)
+        Http.put(FIREBASE_URL .. "/data/call_signals/" .. callerKey .. ".json", declinePayload, function() end)
+        local myKey = cleanFirebaseKey(currentUser.name)
+        Http.delete(FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json", function() end)
         Http.post(BACKEND_URL .. "/api/call/signal", declinePayload, function() end)
         announce("Call declined.")
       end

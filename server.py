@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.14.1",
-                "version_code": 77,
+                "version": "3.14.2",
+                "version_code": 78,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.14.1: Fix safeShowDialog recursion bug so Update Dialog opens instantly on startup with Update Now (Yes) button, plus complete WebRTC + Chunking engine."
+                "changelog": "Version 3.14.2: Direct Firebase Realtime Database Calling & WebRTC Engine - Instant signaling, live room presence, connected status sync, and zero-lag audio streaming."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

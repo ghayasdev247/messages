@@ -593,17 +593,26 @@
     startOrJoinVoiceRoom("public_stage", "Public Voice Stage", "public");
   }
 
+  const FIREBASE_DB = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app";
+  function cleanKey(name) { return (name || "anonymous").toLowerCase().replace(/[^a-z0-9]/g, "_"); }
+
   function callCurrentTarget() {
     if (!currentChatTarget) return;
     const cleanMe = currentUser.name.toLowerCase().replace(/[^a-z0-9]/g, "_");
     const cleanTarget = currentChatTarget.toLowerCase().replace(/[^a-z0-9]/g, "_");
     const roomId = `private_call_${cleanMe < cleanTarget ? cleanMe + "_" + cleanTarget : cleanTarget + "_" + cleanMe}`;
     
-    // Send ringing signal
+    // Send ringing signal directly to Firebase & Cloudflare
+    const sigPayload = { action: "call", from: currentUser.name, to: currentChatTarget, roomId: roomId, mode: "chunk", timestamp: Math.floor(Date.now() / 1000) };
+    fetch(`${FIREBASE_DB}/data/call_signals/${cleanKey(currentChatTarget)}.json`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sigPayload)
+    });
     fetch(`${BACKEND_URL}/api/call/signal`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "call", from: currentUser.name, to: currentChatTarget, roomId: roomId })
+      body: JSON.stringify(sigPayload)
     });
 
     announce(`Calling ${currentChatTarget}... Ringing.`);
@@ -641,10 +650,11 @@
       document.getElementById("call-box-timer").innerText = `${m}:${s}`;
     }, 1000);
 
-    fetch(`${BACKEND_URL}/api/call/join`, {
-      method: "POST",
+    // Join room presence in Firebase
+    fetch(`${FIREBASE_DB}/data/active_calls/${activeCallRoomId}/participants/${cleanKey(currentUser.name)}.json`, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ roomId: roomId, username: currentUser.name, isMuted: false })
+      body: JSON.stringify({ name: currentUser.name, joined_at: Math.floor(Date.now() / 1000), last_seen: Math.floor(Date.now() / 1000), isMuted: false })
     });
 
     startAudioReceiverLoop();
@@ -653,7 +663,6 @@
   function startAudioTransmissionLoop() {
     if (!callMediaStream || !isCallActive) return;
 
-    let chunkBuffer = [];
     try {
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
       callRecorder = new MediaRecorder(callMediaStream, { mimeType: mime });
@@ -665,20 +674,28 @@
         reader.onloadend = () => {
           const b64 = reader.result;
           if (b64 && isCallActive && !isCallMuted) {
+            const chunkPayload = {
+              roomId: activeCallRoomId,
+              sender: currentUser.name,
+              audio: b64,
+              seq: Date.now(),
+              quality: "HD"
+            };
+            // Upload directly to Firebase
+            fetch(`${FIREBASE_DB}/data/active_calls/${activeCallRoomId}/latest_audio.json`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(chunkPayload)
+            }).catch(() => {});
+            // Also send to Cloudflare
             fetch(`${BACKEND_URL}/api/call/audio`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                roomId: activeCallRoomId,
-                sender: currentUser.name,
-                audio: b64,
-                quality: "HD"
-              })
+              body: JSON.stringify(chunkPayload)
             }).catch(() => {});
           }
         };
       };
-      // Record in 700ms continuous chunks
       callRecorder.start(700);
     } catch(err) {
       console.error("MediaRecorder start failed:", err);
@@ -691,14 +708,14 @@
     callStatusLoopInterval = setInterval(async () => {
       if (!isCallActive) return;
 
-      // 1. Fetch live audio chunk & participants
+      // 1. Fetch live audio chunk & participants directly from Firebase
       try {
-        const res = await fetch(`${BACKEND_URL}/api/call/status?room=${activeCallRoomId}&t=${Date.now()}`);
+        const res = await fetch(`${FIREBASE_DB}/data/active_calls/${activeCallRoomId}.json?t=${Date.now()}`);
         if (res.ok) {
           const data = await res.json();
-          if (data && data.success) {
-            // Check connected count
-            const pCount = (data.participants && data.participants.length) || 1;
+          if (data && typeof data === "object") {
+            const parts = data.participants || {};
+            const pCount = Object.keys(parts).length || 1;
             if (activeCallType === "private") {
               if (pCount > 1) {
                 document.getElementById("call-box-sub").innerText = `🟢 Connected (${pCount} in call)`;
@@ -721,14 +738,15 @@
         }
       } catch(e) {}
 
-      // 2. If 1-on-1 private call, poll for call signals (accept, decline, end)
+      // 2. If 1-on-1 private call, poll for call signals directly from Firebase
       if (activeCallType === "private") {
         try {
-          const sigRes = await fetch(`${BACKEND_URL}/api/call/signal?user=${currentUser.name}&t=${Date.now()}`);
+          const myKey = cleanKey(currentUser.name);
+          const sigRes = await fetch(`${FIREBASE_DB}/data/call_signals/${myKey}.json?t=${Date.now()}`);
           if (sigRes.ok) {
             const sigData = await sigRes.json();
-            if (sigData && sigData.signal) {
-              const act = sigData.signal.action;
+            if (sigData && typeof sigData === "object") {
+              const act = sigData.action;
               if (act === "accept") {
                 document.getElementById("call-box-sub").innerText = "🟢 Connected (Talking)";
                 announce("Call connected!");
