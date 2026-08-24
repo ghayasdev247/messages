@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.12.1"
-local APP_VERSION_CODE = 71
+local APP_VERSION = "3.13.0"
+local APP_VERSION_CODE = 72
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2048,6 +2048,152 @@ local btnCallSpeakerWidget = nil
 local activeCallRecipientAccepted = false
 local callWebRTCView = nil
 
+local SELECTED_VOICE_SERVICE = "cloudflare"
+local audioBridgeWebView = nil
+
+function initAudioBridgeWebView()
+  if audioBridgeWebView then return audioBridgeWebView end
+  pcall(function()
+    import "android.webkit.WebView"
+    import "android.webkit.WebChromeClient"
+    import "android.webkit.WebSettings"
+    
+    audioBridgeWebView = WebView(activity)
+    local s = audioBridgeWebView.getSettings()
+    s.setJavaScriptEnabled(true)
+    s.setDomStorageEnabled(true)
+    s.setMediaPlaybackRequiresUserGesture(false)
+    
+    audioBridgeWebView.setWebChromeClient(luajava.override(WebChromeClient, {
+      onPermissionRequest = function(super, request)
+        pcall(function() request.grant(request.getResources()) end)
+      end
+    }))
+  end)
+  return audioBridgeWebView
+end
+
+function showVoiceServiceChooser(roomId, callType, callTitle, targetUser)
+  if isCallActive then
+    announce("Already in an active call.")
+    return
+  end
+  if not activity or (activity.isFinishing and activity.isFinishing()) or (activity.isDestroyed and activity.isDestroyed()) then
+    return
+  end
+  
+  local services = {
+    "📻 1. Walkie-Talkie Mode (Auto-Live Playback)",
+    "🌐 2. PeerJS Direct P2P Audio Engine (In-App)",
+    "🎙️ 3. Agora RTC Studio HD Voice (In-App)",
+    "📞 4. Cloudflare Native Audio Stream (In-App)",
+    "🔗 5. Jitsi Meet HD Audio Room (Global Gateway)"
+  }
+  
+  pcall(function()
+    local builder = AlertDialog.Builder(activity)
+    builder.setTitle("Select Voice Calling Engine to Test")
+    builder.setItems(services, DialogInterface.OnClickListener{
+      onClick = function(dialog, which)
+        if which == 0 then
+          SELECTED_VOICE_SERVICE = "walkie_talkie"
+          startWalkieTalkieSession(roomId, callType, targetUser)
+        elseif which == 1 then
+          SELECTED_VOICE_SERVICE = "peerjs"
+          startPeerJSVoiceCall(roomId, callType, callTitle, targetUser)
+        elseif which == 2 then
+          SELECTED_VOICE_SERVICE = "agora"
+          startAgoraVoiceCall(roomId, callType, callTitle, targetUser)
+        elseif which == 3 then
+          SELECTED_VOICE_SERVICE = "cloudflare"
+          startOrJoinVoiceCall(roomId, callType, callTitle, targetUser)
+        elseif which == 4 then
+          SELECTED_VOICE_SERVICE = "jitsi"
+          startJitsiVoiceCall(roomId, callType, callTitle, targetUser)
+        end
+      end
+    })
+    builder.setNegativeButton("Cancel", nil)
+    builder.show()
+  end)
+end
+
+function startJitsiVoiceCall(roomId, callType, callTitle, targetUser)
+  if not roomId or roomId == "" then roomId = "public_stage" end
+  local cleanRoom = "AccessibleMessenger_" .. roomId:gsub("[^a-zA-Z0-9_]", "_")
+  local cleanUser = (currentUser.name or "User"):gsub("[^a-zA-Z0-9_]", "_")
+  local jitsiUrl = "https://meet.jit.si/" .. cleanRoom .. "#config.startWithVideoMuted=true&config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.disableDeepLinking=false&userInfo.displayName=" .. cleanUser
+  
+  announce("Connecting to " .. (callTitle or "Voice Room") .. " on Jitsi Gateway...")
+  pcall(function()
+    import "android.content.Intent"
+    import "android.net.Uri"
+    local intent = Intent(Intent.ACTION_VIEW, Uri.parse(jitsiUrl))
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    activity.startActivity(intent)
+  end)
+end
+
+function startPeerJSVoiceCall(roomId, callType, callTitle, targetUser)
+  announce("Connecting to PeerJS In-App P2P Engine...")
+  local bridge = initAudioBridgeWebView()
+  if bridge then
+    local cleanMe = (currentUser.name or "user"):gsub("[^%w]", "")
+    local cleanTarget = (targetUser or "peer"):gsub("[^%w]", "")
+    local html = [[
+      <!DOCTYPE html><html><head><script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script></head>
+      <body><script>
+        const peer = new Peer(']] .. cleanMe .. [[');
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+          peer.on('call', call => {
+            call.answer(stream);
+            call.on('stream', remoteStream => {
+              const a = new Audio(); a.srcObject = remoteStream; a.play();
+            });
+          });
+          const call = peer.call(']] .. cleanTarget .. [[', stream);
+          if (call) {
+            call.on('stream', remoteStream => {
+              const a = new Audio(); a.srcObject = remoteStream; a.play();
+            });
+          }
+        });
+      </script></body></html>
+    ]]
+    pcall(function() bridge.loadDataWithBaseURL("https://0.peerjs.com", html, "text/html", "UTF-8", nil) end)
+  end
+  startOrJoinVoiceCall(roomId, callType, "🌐 PeerJS: " .. (callTitle or "Call"), targetUser)
+end
+
+function startAgoraVoiceCall(roomId, callType, callTitle, targetUser)
+  announce("Connecting to Agora RTC Studio HD Voice Engine...")
+  local bridge = initAudioBridgeWebView()
+  if bridge then
+    local cleanRoom = "room_" .. roomId:gsub("[^%w]", "")
+    local html = [[
+      <!DOCTYPE html><html><head><script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script></head>
+      <body><script>
+        const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+        client.join("test_app_id", "]] .. cleanRoom .. [[", null, null).then(async uid => {
+          const localTrack = await AgoraRTC.createMicrophoneAudioTrack();
+          await client.publish([localTrack]);
+        });
+        client.on("user-published", async (user, mediaType) => {
+          await client.subscribe(user, mediaType);
+          if (mediaType === "audio") { user.audioTrack.play(); }
+        });
+      </script></body></html>
+    ]]
+    pcall(function() bridge.loadDataWithBaseURL("https://agora.io", html, "text/html", "UTF-8", nil) end)
+  end
+  startOrJoinVoiceCall(roomId, callType, "🎙️ Agora: " .. (callTitle or "Call"), targetUser)
+end
+
+function startWalkieTalkieSession(roomId, callType, targetUser)
+  announce("Walkie-Talkie Mode Active. Double tap the microphone to transmit live audio.")
+  openVoiceRecordingModal((callType == "public"), targetUser, false)
+end
+
 local function isSenderMe(sender)
   if not sender or not currentUser.name then return false end
   local s1 = string.lower(tostring(sender):gsub("%s+", ""):gsub("[^%w]", ""))
@@ -2696,7 +2842,6 @@ end
 
 function initiatePrivate1on1Call(targetUser)
   if not targetUser or targetUser == "" then return end
-  announce("Calling " .. targetUser .. "...")
   
   local cleanTarget = targetUser:gsub("^%s+", ""):gsub("%s+$", "")
   local cleanMe = currentUser.name:gsub("^%s+", ""):gsub("%s+$", "")
@@ -2713,7 +2858,7 @@ function initiatePrivate1on1Call(targetUser)
   })
   Http.post(BACKEND_URL .. "/api/call/signal", callPayload, function() end)
   
-  startOrJoinVoiceCall(roomId, "private", "📞 Calling: " .. cleanTarget, cleanTarget)
+  showVoiceServiceChooser(roomId, "private", "📞 Calling: " .. cleanTarget, cleanTarget)
 end
 
 local isIncomingCallDialogShowing = false
@@ -4909,7 +5054,7 @@ function createPublicTabView()
   
   if btnPublicVoiceStage then
     btnPublicVoiceStage.onClick = function()
-      startOrJoinVoiceCall("public_stage", "public", "🌐 Public Voice Stage")
+      showVoiceServiceChooser("public_stage", "public", "🌐 Public Voice Stage", nil)
     end
   end
   

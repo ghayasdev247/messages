@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.12.1",
-                "version_code": 71,
+                "version": "3.13.0",
+                "version_code": 72,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.12.1: 100% Native In-App Voice Engine restored directly inside Accessible Messenger (Live microphone capture, ultra-low latency chunk streaming, full in-app controls)."
+                "changelog": "Version 3.13.0: Multi-Service Voice Engine Testing Hub - Test Walkie-Talkie, PeerJS P2P, Agora HD, Cloudflare Native, and Jitsi Meet directly with 1 tap."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

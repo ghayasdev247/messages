@@ -1,7 +1,7 @@
 {
-  "version": "3.12.1",
-  "version_code": 71,
+  "version": "3.13.0",
+  "version_code": 72,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.12.1: 100% Native In-App Voice Engine restored directly inside Accessible Messenger (Live microphone capture, ultra-low latency chunk streaming, full in-app controls)."
+  "changelog": "Version 3.13.0: Multi-Service Voice Engine Testing Hub - Test Walkie-Talkie, PeerJS P2P, Agora HD, Cloudflare Native, and Jitsi Meet directly with 1 tap."
 }
