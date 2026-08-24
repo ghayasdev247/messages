@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Accessible Messenger - Universal Web Client (v3.11.2)</title>
+  <title>Accessible Messenger - Universal Web Client (v3.11.3)</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -141,7 +141,8 @@
       text-align: center;
     }
     .call-title { font-size: 16px; font-weight: bold; color: #25d366; margin-bottom: 4px; }
-    .call-timer { font-size: 14px; color: #ffd54f; font-weight: bold; }
+    .call-status-sub { font-size: 13px; color: #8696a0; margin-bottom: 4px; }
+    .call-timer { font-size: 16px; color: #ffd54f; font-weight: bold; }
     .call-actions { display: flex; gap: 8px; margin-top: 10px; }
 
     .sr-only { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
@@ -157,7 +158,7 @@
   <!-- 1. LOGIN SCREEN -->
   <div id="screen-login">
     <h1>Accessible Messenger</h1>
-    <h2>Universal Web Client (v3.11.2)</h2>
+    <h2>Universal Web Client (v3.11.3)</h2>
 
     <label for="username">Enter Your Alias / Username</label>
     <input type="text" id="username" placeholder="e.g. John" aria-label="Username edit box">
@@ -178,6 +179,7 @@
     <!-- Active Call Banner (if in call) -->
     <div id="active-call-box" class="call-banner hidden">
       <div id="call-box-title" class="call-title">📞 Voice Call Connected</div>
+      <div id="call-box-sub" class="call-status-sub">⚡ Real-Time Audio Streaming Active</div>
       <div id="call-box-timer" class="call-timer">00:00</div>
       <div class="call-actions">
         <button id="btn-call-mute" class="btn-gray" onclick="toggleCallMute()">🎤 Mic On</button>
@@ -237,7 +239,7 @@
 <div id="modal-incoming-call" class="hidden" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center; z-index:9999;">
   <div style="background:#111b21; border:2px solid #25d366; border-radius:12px; padding:24px; max-width:400px; width:90%; text-align:center;">
     <h2 id="incoming-caller-txt" style="font-size:20px; color:#25d366; margin-top:0;">📞 Incoming Voice Call</h2>
-    <p style="color:#e9edef; font-size:16px;">User is calling you on WebRTC Voice.</p>
+    <p style="color:#e9edef; font-size:16px;">User is calling you on Accessible Messenger Voice.</p>
     <div style="display:flex; gap:10px; margin-top:20px;">
       <button class="btn-green" onclick="acceptIncomingCall()">✅ Accept</button>
       <button class="btn-red" onclick="declineIncomingCall()">❌ Decline</button>
@@ -262,18 +264,31 @@
   let mediaRecorder = null;
   let audioChunks = [];
 
-  // WebRTC Call State
+  // Call Engine State
   let isCallActive = false;
   let activeCallRoomId = "";
+  let activeCallType = ""; // "public", "private"
   let activeCallTimer = 0;
   let callTimerInterval = null;
   let isCallMuted = false;
   let pendingIncomingCall = null;
-  let localStream = null;
+  let callMediaStream = null;
+  let callRecorder = null;
+  let callAudioLoopInterval = null;
+  let callStatusLoopInterval = null;
+  let lastPlayedAudioSeq = 0;
+  let isCallChunkSending = false;
 
   function announce(msg) {
     const el = document.getElementById("sr-announcer");
-    el.innerText = msg;
+    if (el) el.innerText = msg;
+  }
+
+  function isSenderMe(sender) {
+    if (!sender || !currentUser.name) return false;
+    const s1 = sender.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const s2 = currentUser.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return (s1 !== "" && s1 === s2);
   }
 
   // --- AUTH & LOGIN ---
@@ -573,9 +588,9 @@
     }
   }
 
-  // --- WEBRTC VOICE CALL ENGINE ---
-  async function startStageCall() {
-    startOrJoinVoiceRoom("public_stage", "Public Voice Stage");
+  // --- 📞 FULL BI-DIRECTIONAL VOICE CALL & STAGE ENGINE ---
+  function startStageCall() {
+    startOrJoinVoiceRoom("public_stage", "Public Voice Stage", "public");
   }
 
   function callCurrentTarget() {
@@ -584,31 +599,37 @@
     const cleanTarget = currentChatTarget.toLowerCase().replace(/[^a-z0-9]/g, "_");
     const roomId = `private_call_${cleanMe < cleanTarget ? cleanMe + "_" + cleanTarget : cleanTarget + "_" + cleanMe}`;
     
-    // Send signal
+    // Send ringing signal
     fetch(`${BACKEND_URL}/api/call/signal`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "call", from: currentUser.name, to: currentChatTarget, roomId: roomId })
     });
 
-    startOrJoinVoiceRoom(roomId, `1-on-1 Call with ${currentChatTarget}`);
+    announce(`Calling ${currentChatTarget}... Ringing.`);
+    startOrJoinVoiceRoom(roomId, `1-on-1 Call with ${currentChatTarget}`, "private");
   }
 
-  async function startOrJoinVoiceRoom(roomId, title) {
+  async function startOrJoinVoiceRoom(roomId, title, type) {
     if (isCallActive) return;
     isCallActive = true;
     activeCallRoomId = roomId;
+    activeCallType = type || "public";
     activeCallTimer = 0;
     isCallMuted = false;
+    lastPlayedAudioSeq = Date.now();
+    isCallChunkSending = false;
 
     document.getElementById("active-call-box").classList.remove("hidden");
     document.getElementById("call-box-title").innerText = `📞 ${title}`;
+    document.getElementById("call-box-sub").innerText = (activeCallType === "private") ? "📞 Ringing..." : "🟢 Connected (Live)";
     announce(`Joining ${title}...`);
 
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      callMediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      startAudioTransmissionLoop();
     } catch(e) {
-      announce("Microphone access failed.");
+      announce("Microphone access failed. Please allow microphone permissions.");
     }
 
     callTimerInterval = setInterval(() => {
@@ -618,17 +639,117 @@
       document.getElementById("call-box-timer").innerText = `${m}:${s}`;
     }, 1000);
 
-    await fetch(`${BACKEND_URL}/api/call/join`, {
+    // Join room on backend
+    fetch(`${BACKEND_URL}/api/call/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ roomId: roomId, username: currentUser.name, isMuted: false })
     });
+
+    // Start Audio Receiver & Room Status Poller (every 700ms)
+    startAudioReceiverLoop();
+  }
+
+  function startAudioTransmissionLoop() {
+    if (!callMediaStream || !isCallActive) return;
+
+    let chunkBuffer = [];
+    try {
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+      callRecorder = new MediaRecorder(callMediaStream, { mimeType: mime });
+      callRecorder.ondataavailable = async (e) => {
+        if (!isCallActive || isCallMuted || !e.data || e.data.size < 100) return;
+        
+        const reader = new FileReader();
+        reader.readAsDataURL(e.data);
+        reader.onloadend = () => {
+          const b64 = reader.result;
+          if (b64 && isCallActive && !isCallMuted) {
+            fetch(`${BACKEND_URL}/api/call/audio`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                roomId: activeCallRoomId,
+                sender: currentUser.name,
+                audio: b64,
+                quality: "HD"
+              })
+            }).catch(() => {});
+          }
+        };
+      };
+      // Record in 700ms continuous chunks
+      callRecorder.start(700);
+    } catch(err) {
+      console.error("MediaRecorder start failed:", err);
+    }
+  }
+
+  function startAudioReceiverLoop() {
+    if (callStatusLoopInterval) clearInterval(callStatusLoopInterval);
+
+    callStatusLoopInterval = setInterval(async () => {
+      if (!isCallActive) return;
+
+      // 1. Fetch live audio chunk & participants
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/call/status?room=${activeCallRoomId}&t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            // Check connected count
+            const pCount = (data.participants && data.participants.length) || 1;
+            if (activeCallType === "private") {
+              if (pCount > 1) {
+                document.getElementById("call-box-sub").innerText = `🟢 Connected (${pCount} in call)`;
+              }
+            } else {
+              document.getElementById("call-box-sub").innerText = `🟢 Live Stage (${pCount} in room)`;
+            }
+
+            // Play incoming audio if from another user
+            if (data.latest_audio && typeof data.latest_audio === "object") {
+              const seq = Number(data.latest_audio.seq || 0);
+              const sender = data.latest_audio.sender || "";
+              if (seq > lastPlayedAudioSeq && !isSenderMe(sender) && data.latest_audio.audio) {
+                lastPlayedAudioSeq = seq;
+                const incomingAudio = new Audio(data.latest_audio.audio);
+                incomingAudio.play().catch(() => {});
+              }
+            }
+          }
+        }
+      } catch(e) {}
+
+      // 2. If 1-on-1 private call, poll for call signals (accept, decline, end)
+      if (activeCallType === "private") {
+        try {
+          const sigRes = await fetch(`${BACKEND_URL}/api/call/signal?user=${currentUser.name}&t=${Date.now()}`);
+          if (sigRes.ok) {
+            const sigData = await sigRes.json();
+            if (sigData && sigData.signal) {
+              const act = sigData.signal.action;
+              if (act === "accept") {
+                document.getElementById("call-box-sub").innerText = "🟢 Connected (Talking)";
+                announce("Call connected!");
+              } else if (act === "decline") {
+                announce("Call was declined.");
+                endCurrentCall();
+              } else if (act === "end") {
+                announce("Call ended by user.");
+                endCurrentCall();
+              }
+            }
+          }
+        } catch(e) {}
+      }
+    }, 700);
   }
 
   function toggleCallMute() {
     isCallMuted = !isCallMuted;
-    if (localStream) {
-      localStream.getAudioTracks().forEach(t => t.enabled = !isCallMuted);
+    if (callMediaStream) {
+      callMediaStream.getAudioTracks().forEach(t => t.enabled = !isCallMuted);
     }
     const btn = document.getElementById("btn-call-mute");
     if (isCallMuted) {
@@ -645,12 +766,17 @@
   function endCurrentCall() {
     if (!isCallActive) return;
     isCallActive = false;
-    clearInterval(callTimerInterval);
+    if (callTimerInterval) clearInterval(callTimerInterval);
+    if (callStatusLoopInterval) clearInterval(callStatusLoopInterval);
+
     document.getElementById("active-call-box").classList.add("hidden");
 
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
-      localStream = null;
+    if (callRecorder && callRecorder.state !== "inactive") {
+      try { callRecorder.stop(); } catch(e) {}
+    }
+    if (callMediaStream) {
+      callMediaStream.getTracks().forEach(t => t.stop());
+      callMediaStream = null;
     }
 
     fetch(`${BACKEND_URL}/api/call/leave`, {
@@ -659,17 +785,25 @@
       body: JSON.stringify({ roomId: activeCallRoomId, username: currentUser.name })
     });
 
-    announce("Call disconnected.");
+    if (activeCallType === "private" && currentChatTarget) {
+      fetch(`${BACKEND_URL}/api/call/signal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "end", from: currentUser.name, to: currentChatTarget, roomId: activeCallRoomId })
+      });
+    }
+
+    announce("Call ended.");
   }
 
-  // --- BACKGROUND CALL SIGNALING ---
+  // --- BACKGROUND CALL SIGNALING (IDLE) ---
   async function checkCallSignals() {
     if (isCallActive || !currentUser.online) return;
     try {
       const res = await fetch(`${BACKEND_URL}/api/call/signal?user=${currentUser.name}&t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        if (data && data.signal && data.signal.action === "call" && data.signal.from !== currentUser.name) {
+        if (data && data.signal && data.signal.action === "call" && !isSenderMe(data.signal.from)) {
           pendingIncomingCall = data.signal;
           document.getElementById("incoming-caller-txt").innerText = `📞 Incoming Call from ${data.signal.from}`;
           document.getElementById("modal-incoming-call").classList.remove("hidden");
@@ -691,7 +825,7 @@
       body: JSON.stringify({ action: "accept", from: currentUser.name, to: call.from, roomId: call.roomId })
     });
 
-    startOrJoinVoiceRoom(call.roomId, `1-on-1 Call with ${call.from}`);
+    startOrJoinVoiceRoom(call.roomId, `1-on-1 Call with ${call.from}`, "private");
   }
 
   function declineIncomingCall() {
@@ -718,7 +852,7 @@
     signalInterval = setInterval(() => {
       if (!currentUser.online) return;
       checkCallSignals();
-    }, 1500);
+    }, 1200);
   }
 
   function escapeHtml(text) {

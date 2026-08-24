@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.11.2"
-local APP_VERSION_CODE = 67
+local APP_VERSION = "3.11.3"
+local APP_VERSION_CODE = 68
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -311,7 +311,7 @@ end
 function decodeBase64ToAudioFile(b64Data, targetPath)
   local success = false
   pcall(function()
-    local cleanB64 = b64Data:gsub("^data:audio/[%w%+]+;base64,", "")
+    local cleanB64 = b64Data:gsub("^data:[^,]+,", ""):gsub("%s+", "")
     local decodedBytes = base64Decode(cleanB64)
     if decodedBytes and #decodedBytes > 0 then
       local f = io.open(targetPath, "wb")

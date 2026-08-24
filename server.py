@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.11.2",
-                "version_code": 67,
+                "version": "3.11.3",
+                "version_code": 68,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.11.1: Critical fix for screen reader freeze after call end, audio deadlock recovery watchdog, crash-proof polling loops."
+                "changelog": "Version 3.11.3: Full Cross-Platform Web & Mobile Voice Engine - added real-time bi-directional audio chunk streaming, cross-platform MIME decoder, and instant call signal handshakes."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
