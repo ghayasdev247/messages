@@ -22,7 +22,7 @@ from tkinter import ttk, messagebox, scrolledtext
 # CONFIGURATION & GLOBAL STATE
 # --------------------------------------------------------------------
 FIREBASE_URL = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app"
-BACKEND_URL = "http://10.20.244.148:5000"
+BACKEND_URL = "https://messages.vistudio247.workers.dev"
 
 GITHUB_OWNER = "ghayasdev247"
 GITHUB_REPO = "messages"
