@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.14.0",
-                "version_code": 76,
+                "version": "3.14.1",
+                "version_code": 77,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.14.0: Hybrid Voice Call Engine (WebRTC + Chunking), Hidden WebView WebChromeClient permission bridge, onJsPrompt signaling to Firebase, and absolute microphone kill-switch."
+                "changelog": "Version 3.14.1: Fix safeShowDialog recursion bug so Update Dialog opens instantly on startup with Update Now (Yes) button, plus complete WebRTC + Chunking engine."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

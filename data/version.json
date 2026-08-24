@@ -1,7 +1,7 @@
 {
-  "version": "3.14.0",
-  "version_code": 76,
+  "version": "3.14.1",
+  "version_code": 77,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.14.0: Hybrid Voice Call Engine (WebRTC + Chunking), Hidden WebView WebChromeClient permission bridge, onJsPrompt signaling to Firebase, and absolute microphone kill-switch."
+  "changelog": "Version 3.14.1: Fix safeShowDialog recursion bug so Update Dialog opens instantly on startup with Update Now (Yes) button, plus complete WebRTC + Chunking engine."
 }
