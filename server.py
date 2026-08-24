@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.13.3",
-                "version_code": 75,
+                "version": "3.14.0",
+                "version_code": 76,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.13.3: Global safeShowDialog BadTokenException protection across all screens, clean 100% verified Lua code, and zero-lag in-app voice calling."
+                "changelog": "Version 3.14.0: Hybrid Voice Call Engine (WebRTC + Chunking), Hidden WebView WebChromeClient permission bridge, onJsPrompt signaling to Firebase, and absolute microphone kill-switch."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
