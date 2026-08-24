@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.11.3",
-                "version_code": 68,
+                "version": "3.11.4",
+                "version_code": 69,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.11.3: Full Cross-Platform Web & Mobile Voice Engine - added real-time bi-directional audio chunk streaming, cross-platform MIME decoder, and instant call signal handshakes."
+                "changelog": "Version 3.11.4: Fixed BadTokenException during incoming call dialogs with activity lifecycle validation, single-instance dialog management, and auto-dismiss on caller disconnect."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

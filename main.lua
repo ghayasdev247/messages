@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.11.3"
-local APP_VERSION_CODE = 68
+local APP_VERSION = "3.11.4"
+local APP_VERSION_CODE = 69
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2368,12 +2368,18 @@ function showLiveCallModal()
     leaveActiveVoiceCall()
   end
 
-  local builder = AlertDialog.Builder(activity)
-  builder.setTitle("Live Voice Session")
-  builder.setView(dialogView)
-  builder.setCancelable(false)
-  activeCallDialog = builder.create()
-  activeCallDialog.show()
+  if not activity or (activity.isFinishing and activity.isFinishing()) or (activity.isDestroyed and activity.isDestroyed()) then
+    return
+  end
+
+  pcall(function()
+    local builder = AlertDialog.Builder(activity)
+    builder.setTitle("Live Voice Session")
+    builder.setView(dialogView)
+    builder.setCancelable(false)
+    activeCallDialog = builder.create()
+    activeCallDialog.show()
+  end)
   
   updateCallParticipantsList()
 end
@@ -2742,54 +2748,84 @@ function initiatePrivate1on1Call(targetUser)
   startOrJoinVoiceCall(roomId, "private", "📞 Calling: " .. cleanTarget, cleanTarget)
 end
 
+local isIncomingCallDialogShowing = false
+local incomingCallDialogRef = nil
+
 function checkIncomingCallSignals()
   if isCallActive or not currentUser.name or currentUser.name == "" then return end
   
   Http.get(BACKEND_URL .. "/api/call/signal?user=" .. currentUser.name .. "&t=" .. os.time(), function(code, content)
     if code == 200 and content and content ~= "null" then
       local res = decodeJSON(content)
-      if res and res.signal and res.signal.action == "call" and res.signal.from ~= currentUser.name then
-        local callerName = res.signal.from
-        local targetRoom = res.signal.roomId
-        showIncomingCallDialog(callerName, targetRoom)
+      if res and res.signal and type(res.signal) == "table" then
+        if res.signal.action == "call" and res.signal.from ~= currentUser.name then
+          local callerName = res.signal.from
+          local targetRoom = res.signal.roomId
+          showIncomingCallDialog(callerName, targetRoom)
+        elseif res.signal.action == "end" or res.signal.action == "decline" then
+          if isIncomingCallDialogShowing and incomingCallDialogRef then
+            pcall(function() incomingCallDialogRef.dismiss() end)
+            incomingCallDialogRef = nil
+            isIncomingCallDialogShowing = false
+            announce("Caller ended the call.")
+          end
+        end
+      else
+        if isIncomingCallDialogShowing and incomingCallDialogRef then
+          pcall(function() incomingCallDialogRef.dismiss() end)
+          incomingCallDialogRef = nil
+          isIncomingCallDialogShowing = false
+        end
       end
     end
   end)
 end
 
 function showIncomingCallDialog(callerName, targetRoom)
-  if isCallActive then return end
+  if isCallActive or isIncomingCallDialogShowing then return end
+  if not activity or (activity.isFinishing and activity.isFinishing()) or (activity.isDestroyed and activity.isDestroyed()) then
+    return
+  end
+  
+  isIncomingCallDialogShowing = true
   announce("Incoming voice call from " .. callerName .. ". Double tap Accept to talk.")
   
-  local alertBuilder = AlertDialog.Builder(activity)
-  alertBuilder.setTitle("📞 Incoming Voice Call")
-  alertBuilder.setMessage("User " .. callerName .. " is calling you.")
-  alertBuilder.setPositiveButton("✅ Accept Call", DialogInterface.OnClickListener{
-    onClick = function(d, w)
-      local acceptPayload = encodeJSON({
-        action = "accept",
-        from = currentUser.name,
-        to = callerName,
-        roomId = targetRoom
-      })
-      Http.post(BACKEND_URL .. "/api/call/signal", acceptPayload, function() end)
-      startOrJoinVoiceCall(targetRoom, "private", "📞 Call: " .. callerName, callerName)
-    end
-  })
-  alertBuilder.setNegativeButton("❌ Decline", DialogInterface.OnClickListener{
-    onClick = function(d, w)
-      local declinePayload = encodeJSON({
-        action = "decline",
-        from = currentUser.name,
-        to = callerName,
-        roomId = targetRoom
-      })
-      Http.post(BACKEND_URL .. "/api/call/signal", declinePayload, function() end)
-      announce("Call declined.")
-    end
-  })
-  alertBuilder.setCancelable(false)
-  alertBuilder.show()
+  pcall(function()
+    local alertBuilder = AlertDialog.Builder(activity)
+    alertBuilder.setTitle("📞 Incoming Voice Call")
+    alertBuilder.setMessage("User " .. callerName .. " is calling you.")
+    alertBuilder.setPositiveButton("✅ Accept Call", DialogInterface.OnClickListener{
+      onClick = function(d, w)
+        isIncomingCallDialogShowing = false
+        incomingCallDialogRef = nil
+        local acceptPayload = encodeJSON({
+          action = "accept",
+          from = currentUser.name,
+          to = callerName,
+          roomId = targetRoom
+        })
+        Http.post(BACKEND_URL .. "/api/call/signal", acceptPayload, function() end)
+        startOrJoinVoiceCall(targetRoom, "private", "📞 Call: " .. callerName, callerName)
+      end
+    })
+    alertBuilder.setNegativeButton("❌ Decline", DialogInterface.OnClickListener{
+      onClick = function(d, w)
+        isIncomingCallDialogShowing = false
+        incomingCallDialogRef = nil
+        local declinePayload = encodeJSON({
+          action = "decline",
+          from = currentUser.name,
+          to = callerName,
+          roomId = targetRoom
+        })
+        Http.post(BACKEND_URL .. "/api/call/signal", declinePayload, function() end)
+        announce("Call declined.")
+      end
+    })
+    alertBuilder.setCancelable(false)
+    incomingCallDialogRef = alertBuilder.create()
+    incomingCallDialogRef.show()
+  end)
 end
 
 -- --------------------------------------------------------------------
