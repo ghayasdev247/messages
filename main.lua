@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.2"
-local APP_VERSION_CODE = 78
+local APP_VERSION = "3.14.3"
+local APP_VERSION_CODE = 79
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2383,7 +2383,7 @@ function startWebRTCSignalingPoll()
   if not isCallActive or activeCallMode ~= "webrtc" then return end
   
   -- 1. Poll WebRTC Signals from Firebase
-  local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. ".json"
+  local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999))
   Http.get(sigUrl, function(code, content)
     if isCallActive and activeCallMode == "webrtc" and code == 200 and content and content ~= "null" then
       pcall(function()
@@ -2424,7 +2424,7 @@ function startWebRTCSignalingPoll()
   end)
   
   -- 2. Poll Room Presence from Firebase (to update participants & mark connected)
-  local roomUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json"
+  local roomUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999))
   Http.get(roomUrl, function(rCode, rContent)
     if isCallActive and rCode == 200 and rContent and rContent ~= "null" then
       pcall(function()
@@ -2989,7 +2989,7 @@ function pollLiveCallRoomStatus()
   
   -- Fetch Room Status & Incoming Audio Packets
   pcall(function()
-    Http.get(BACKEND_URL .. "/api/call/status?room=" .. activeCallRoomId .. "&t=" .. os.time(), function(code, content)
+    Http.get(FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999)), function(code, content)
       pcall(function()
         if isCallActive and code == 200 and content and content ~= "null" then
           local data = decodeJSON(content)
