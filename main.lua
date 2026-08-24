@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.13.2"
-local APP_VERSION_CODE = 74
+local APP_VERSION = "3.13.3"
+local APP_VERSION_CODE = 75
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -503,6 +503,19 @@ function purgeCloudFeed(path)
 end
 
 -- --------------------------------------------------------------------
+
+function safeShowDialog(builder)
+  if not builder then return nil end
+  if not activity or (activity.isFinishing and activity.isFinishing()) or (activity.isDestroyed and activity.isDestroyed()) then
+    return nil
+  end
+  local d = nil
+  pcall(function()
+    d = safeShowDialog(builder)
+  end)
+  return d
+end
+
 -- LOCAL CHAT EXPORTER
 -- --------------------------------------------------------------------
 function saveChatLocally(chatType, targetName, messagesList)
@@ -675,7 +688,7 @@ function showUpdateAvailableDialog(manifest)
     end
   })
   builder.setCancelable(false)
-  builder.show()
+  safeShowDialog(builder)
   announce("Update available for Version " .. newVer .. ". Tap Update Now to proceed.")
 end
 
@@ -2008,7 +2021,7 @@ function showMessageOptionsDialog(msgItem, msgIndex, isPublic, targetName, isGro
       end
     end
   })
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGroup)
@@ -2031,7 +2044,7 @@ function showEmojiReactionDialog(msgItem, msgIndex, isPublic, targetName, isGrou
       announce("Reacted with " .. emojis[which + 1] .. " to message")
     end
   })
-  builder.show()
+  safeShowDialog(builder)
 end
 
 -- --------------------------------------------------------------------
@@ -3679,7 +3692,7 @@ function showNewChatUserPickerDialog()
       end
     })
     builder.setNegativeButton("Cancel", nil)
-    builder.show()
+    safeShowDialog(builder)
   end)
 end
 
@@ -3726,7 +3739,7 @@ function showManualUsernameInputDialog()
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 -- --------------------------------------------------------------------
@@ -3912,7 +3925,7 @@ function showCreateGroupDialog()
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function saveGroupToCloud(groupObj, commitMsg, callback)
@@ -4159,7 +4172,7 @@ function showJoinGroupModal(groupObj)
     })
     builder.setNegativeButton("Cancel", nil)
   end
-  builder.show()
+  safeShowDialog(builder)
 end
 
 -- --------------------------------------------------------------------
@@ -4411,7 +4424,7 @@ function showGlobalGroupSettingsDialog(groupObj)
       end
     end
   })
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showViewJoinRequestsDialog(groupObj)
@@ -4435,7 +4448,7 @@ function showViewJoinRequestsDialog(groupObj)
     end
   })
   builder.setNegativeButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showReviewSingleRequestDialog(groupObj, applicantName, applicantIdx)
@@ -4470,7 +4483,7 @@ function showReviewSingleRequestDialog(groupObj, applicantName, applicantIdx)
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showGroupMembersListDialog(groupObj)
@@ -4486,7 +4499,7 @@ function showGroupMembersListDialog(groupObj)
   builder.setTitle("Members of " .. (groupObj.name or "Group") .. " (" .. #members .. ")")
   builder.setItems(displayList, nil)
   builder.setPositiveButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showRemoveMemberDialog(groupObj)
@@ -4520,7 +4533,7 @@ function showRemoveMemberDialog(groupObj)
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showTransferAdminDialog(groupObj)
@@ -4549,7 +4562,7 @@ function showTransferAdminDialog(groupObj)
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showEditGroupInfoDialog(groupObj)
@@ -4610,7 +4623,7 @@ function showEditGroupInfoDialog(groupObj)
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showAddMembersDialog(groupObj)
@@ -4708,7 +4721,7 @@ function showAddMembersDialog(groupObj)
       end
     })
     builder.setNegativeButton("Cancel", nil)
-    builder.show()
+    safeShowDialog(builder)
   end)
 end
 
@@ -5163,7 +5176,7 @@ function showNewChatDialog()
         end
       })
       builder.setNegativeButton("Cancel", nil)
-      builder.show()
+      safeShowDialog(builder)
     end)
   end)
 end
@@ -6504,7 +6517,7 @@ function showUserModerationDialog(u)
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showAdminPasswordDialog(u)
@@ -6537,7 +6550,7 @@ function showAdminPasswordDialog(u)
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function applyUserBan(username, durationMinutes, reason)
@@ -6635,7 +6648,7 @@ function showAdminBlockedIpsDialog()
     end
   })
   builder.setNegativeButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showAdminBroadcastDialog()
@@ -6670,7 +6683,7 @@ function showAdminBroadcastDialog()
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function testServerSpeedAndDiagnostics()
@@ -6719,7 +6732,7 @@ function testServerSpeedAndDiagnostics()
         testServerSpeedAndDiagnostics()
       end
     })
-    builder.show()
+    safeShowDialog(builder)
     announce("Server speed test complete. Latency is " .. latencyMs .. " milliseconds.")
   end)
 end
@@ -6771,7 +6784,7 @@ function showAdminFeedbacksDialog()
       end
     })
     builder.setNegativeButton("Close", nil)
-    builder.show()
+    safeShowDialog(builder)
   end)
 end
 
@@ -6806,7 +6819,7 @@ function showFeedbackDetailsDialog(f)
     end
   })
   builder.setNeutralButton("Back", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showAdminMaintenanceDialog()
@@ -6860,7 +6873,7 @@ function showAdminMaintenanceDialog()
       })
     end
     builder.setNegativeButton("Cancel", nil)
-    builder.show()
+    safeShowDialog(builder)
   end)
 end
 
@@ -6891,7 +6904,7 @@ function showHelpAndFeedbackDialog()
     end
   })
   builder.setNegativeButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showSubmitFeedbackDialog()
@@ -6979,7 +6992,7 @@ function showSubmitFeedbackDialog()
     end
   })
   builder.setNegativeButton("Cancel", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showUserGuideDialog()
@@ -7007,7 +7020,7 @@ function showUserGuideDialog()
   builder.setTitle("📖 User Guide & Screen Reader Manual")
   builder.setMessage(guideText)
   builder.setPositiveButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showChangelogDialog()
@@ -7039,7 +7052,7 @@ function showChangelogDialog()
   builder.setTitle("📜 Version Changelog & Release Notes")
   builder.setMessage(changelogText)
   builder.setPositiveButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 function showAboutDialog()
@@ -7053,7 +7066,7 @@ function showAboutDialog()
   builder.setTitle("ℹ️ About Accessible Messenger")
   builder.setMessage(aboutText)
   builder.setPositiveButton("Close", nil)
-  builder.show()
+  safeShowDialog(builder)
 end
 
 -- --------------------------------------------------------------------

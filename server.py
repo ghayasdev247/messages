@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.13.2",
-                "version_code": 74,
+                "version": "3.13.3",
+                "version_code": 75,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.13.2: Critical syntax error fix for encodeJSON closing end, full URL encoding for names with spaces, and verified 100% valid Lua AST."
+                "changelog": "Version 3.13.3: Global safeShowDialog BadTokenException protection across all screens, clean 100% verified Lua code, and zero-lag in-app voice calling."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

@@ -1,7 +1,7 @@
 {
-  "version": "3.13.2",
-  "version_code": 74,
+  "version": "3.13.3",
+  "version_code": 75,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.13.2: Critical syntax error fix for encodeJSON closing end, full URL encoding for names with spaces, and verified 100% valid Lua AST."
+  "changelog": "Version 3.13.3: Global safeShowDialog BadTokenException protection across all screens, clean 100% verified Lua code, and zero-lag in-app voice calling."
 }
