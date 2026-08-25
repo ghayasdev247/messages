@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.14.5",
-                "version_code": 81,
+                "version": "3.14.6",
+                "version_code": 82,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.14.5: Fixed Android AsyncTask ThreadPoolExecutor exhaustion and RejectedExecutionException crash."
+                "changelog": "Version 3.14.6: Low-Bandwidth & Network Optimization - Adaptive polling, screen-off throttling, TTL caching, and AMR_NB 12.2kbps compression."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

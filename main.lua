@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.5"
-local APP_VERSION_CODE = 81
+local APP_VERSION = "3.14.6"
+local APP_VERSION_CODE = 82
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -841,38 +841,84 @@ end
 -- --------------------------------------------------------------------
 -- UNIFIED NETWORKING ENGINE
 -- --------------------------------------------------------------------
-function fetchFirebaseData(path, callback)
-  local fbPath = path:gsub("%.json$", "")
-  local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json?t=" .. os.time()
-  
-  Http.get(fbUrl, function(code, content)
-    if code == 200 then
-      if not content or content == "" or content == "null" then
-        callback(true, {})
-        return
-      end
-      local fbData = decodeJSON(content)
-      if fbData and type(fbData) == "table" then
-        local list = {}
-        if fbData[1] ~= nil then
-          for _, item in ipairs(fbData) do
-            if type(item) == "table" then
-              table.insert(list, item)
-            end
-          end
-        else
-          for k, v in pairs(fbData) do
-            if type(v) == "table" then
-              v._fb_key = tostring(k)
-              table.insert(list, v)
-            end
-          end
-        end
-        callback(true, list)
-        return
+
+-- --------------------------------------------------------------------
+-- ⚡ ULTRA-LOW BANDWIDTH OPTIMIZATION & POWER SAVING ENGINE
+-- --------------------------------------------------------------------
+local function isAppActiveAndScreenOn()
+  local isScreenActive = true
+  pcall(function()
+    import "android.content.Context"
+    import "android.os.PowerManager"
+    local pm = activity.getSystemService(Context.POWER_SERVICE)
+    if pm then
+      if Build.VERSION.SDK_INT >= 20 then
+        isScreenActive = pm.isInteractive()
+      else
+        isScreenActive = pm.isScreenOn()
       end
     end
-    callback(false, {})
+  end)
+  
+  if not isScreenActive then return false end
+  
+  local hasFocus = true
+  pcall(function()
+    if activity and activity.hasWindowFocus then
+      hasFocus = activity.hasWindowFocus()
+    end
+  end)
+  return hasFocus
+end
+
+local firebaseMemoryCache = {} -- path -> { data = table, ts = timestamp }
+
+function fetchFirebaseData(path, callback)
+  local fbPath = path:gsub("%.json$", "")
+  local now_ts = os.time()
+  
+  -- Fast return from memory cache if within 15 seconds
+  if firebaseMemoryCache[fbPath] and (now_ts - firebaseMemoryCache[fbPath].ts < 15) then
+    if callback then callback(true, firebaseMemoryCache[fbPath].data) end
+    return
+  end
+  
+  local fbUrl = FIREBASE_URL .. "/" .. fbPath .. ".json?t=" .. tostring(now_ts) .. tostring(math.random(100, 999))
+  
+  pcall(function()
+    Http.get(fbUrl, function(code, content)
+      if code == 200 then
+        if not content or content == "" or content == "null" then
+          firebaseMemoryCache[fbPath] = { data = {}, ts = now_ts }
+          if callback then callback(true, {}) end
+          return
+        end
+        pcall(function()
+          local fbData = decodeJSON(content)
+          if fbData and type(fbData) == "table" then
+            local list = {}
+            if fbData[1] ~= nil then
+              for _, item in ipairs(fbData) do
+                if type(item) == "table" then
+                  table.insert(list, item)
+                end
+              end
+            else
+              for k, v in pairs(fbData) do
+                if type(v) == "table" then
+                  v._fb_key = tostring(k)
+                  table.insert(list, v)
+                end
+              end
+            end
+            firebaseMemoryCache[fbPath] = { data = list, ts = now_ts }
+            if callback then callback(true, list) end
+            return
+          end
+        end)
+      end
+      if callback then callback(false, {}) end
+    end)
   end)
 end
 
@@ -1129,14 +1175,18 @@ function downloadAndPlayVoiceNote(msgItem)
   end)
 
   if not isFileReady then
-    local fallbackM4a = voiceFolder .. "/voice_" .. (audioId or "note") .. ".m4a"
-    pcall(function()
-      local fObj = File(fallbackM4a)
-      if fObj.exists() and fObj.length() > 0 then
-        targetAudioFile = fallbackM4a
-        isFileReady = true
-      end
-    end)
+    local extensions = { ".m4a", ".aac", ".mp3", ".ogg" }
+    for _, ext in ipairs(extensions) do
+      local checkPath = voiceFolder .. "/voice_" .. (audioId or "note") .. ext
+      pcall(function()
+        local fObj = File(checkPath)
+        if fObj.exists() and fObj.length() > 0 then
+          targetAudioFile = checkPath
+          isFileReady = true
+        end
+      end)
+      if isFileReady then break end
+    end
   end
 
   if isFileReady then
@@ -2917,17 +2967,14 @@ function transmitLiveAudioBurst()
     activeCallRecorder = MediaRecorder()
     activeCallRecorder.setAudioSource(MediaRecorder.AudioSource.MIC)
     activeCallRecorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-    -- Try AMR_WB first, fall back to AMR_NB
-    local encOk = pcall(function()
-      activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_WB)
-      activeCallRecorder.setAudioSamplingRate(16000)
+    -- Ultra-Low Bandwidth Optimization: AMR_NB @ 8000Hz (12.2 kbps bitrate)
+    pcall(function()
+      activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+      activeCallRecorder.setAudioSamplingRate(8000)
+      if activeCallRecorder.setAudioEncodingBitRate then
+        activeCallRecorder.setAudioEncodingBitRate(12200)
+      end
     end)
-    if not encOk then
-      pcall(function()
-        activeCallRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-        activeCallRecorder.setAudioSamplingRate(8000)
-      end)
-    end
     activeCallRecorder.setOutputFile(chunkFile)
     activeCallRecorder.prepare()
     activeCallRecorder.start()
@@ -5713,49 +5760,68 @@ function createPrivateTabView()
   return view
 end
 
+local lastOnlineUsersFetchTs = 0
+local cachedOnlineUsers = {}
+
 function fetchOnlineUsersList()
   local now_ts = os.time()
-  local fbUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. now_ts
   
-  Http.get(fbUrl, function(code, content)
-    if code == 200 and content and content ~= "null" and content ~= "{}" then
-      local data = decodeJSON(content)
-      if data and type(data) == "table" then
-        local result = {}
-        local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
-        
-        for k, v in pairs(data) do
-          if type(v) == "table" then
-            local name = v.name or v.username
-            local lastSeen = tonumber(v.last_seen or 0) or 0
-            if name and type(name) == "string" and name ~= "" then
-              local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
-              local lowerName = string.lower(cleanName)
-              local isOnline = (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true)
-              if isOnline and lowerName ~= myClean then
-                table.insert(result, {
-                  name = cleanName,
-                  status = "Online",
-                  last_seen = lastSeen
-                })
-              end
-            end
-          end
-        end
-        
-        table.sort(result, function(a, b) return a.name < b.name end)
-        onlineUsersList = result
-        if activeTab == "private" then
-          updatePrivateDirectoryUI()
-        end
-        return
-      end
-    end
-    
-    onlineUsersList = {}
+  -- Fast return from 15-second cache to eliminate mobile data drain
+  if (now_ts - lastOnlineUsersFetchTs < 15) and #cachedOnlineUsers > 0 then
+    onlineUsersList = cachedOnlineUsers
     if activeTab == "private" then
       updatePrivateDirectoryUI()
     end
+    return
+  end
+  
+  local fbUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. tostring(now_ts) .. tostring(math.random(100, 999))
+  
+  pcall(function()
+    Http.get(fbUrl, function(code, content)
+      if code == 200 and content and content ~= "null" and content ~= "{}" then
+        pcall(function()
+          local data = decodeJSON(content)
+          if data and type(data) == "table" then
+            local result = {}
+            local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+            
+            for k, v in pairs(data) do
+              if type(v) == "table" then
+                local name = v.name or v.username
+                local lastSeen = tonumber(v.last_seen or 0) or 0
+                if name and type(name) == "string" and name ~= "" then
+                  local cleanName = name:gsub("^%s+", ""):gsub("%s+$", "")
+                  local lowerName = string.lower(cleanName)
+                  local isOnline = (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true)
+                  if isOnline and lowerName ~= myClean then
+                    table.insert(result, {
+                      name = cleanName,
+                      status = "Online",
+                      last_seen = lastSeen
+                    })
+                  end
+                end
+              end
+            end
+            
+            table.sort(result, function(a, b) return a.name < b.name end)
+            cachedOnlineUsers = result
+            lastOnlineUsersFetchTs = now_ts
+            onlineUsersList = result
+            if activeTab == "private" then
+              updatePrivateDirectoryUI()
+            end
+            return
+          end
+        end)
+      end
+      
+      onlineUsersList = cachedOnlineUsers
+      if activeTab == "private" then
+        updatePrivateDirectoryUI()
+      end
+    end)
   end)
 end
 
@@ -7558,14 +7624,32 @@ function setPresenceOffline()
 end
 
 local isSignalPollingRunning = false
+local callSignalIdleCounter = 0
+
 function startFastCallSignalLoop()
   if isSignalPollingRunning then return end
   isSignalPollingRunning = true
+  
   local function signalPoll()
     if currentUser.online and not isCallActive then
       checkIncomingCallSignals()
     end
-    Handler().postDelayed(Runnable{ run = signalPoll }, 3000)
+    
+    -- Smart Adaptive Backoff Engine:
+    -- Active Screen: 3.5s normal -> 6s idle (>30s no activity)
+    -- Background / Screen-Off: 10s lazy check (90% data & battery saved)
+    local nextDelay = 3500
+    local isAppActive = isAppActiveAndScreenOn()
+    if not isAppActive then
+      nextDelay = 10000
+    else
+      callSignalIdleCounter = callSignalIdleCounter + 1
+      if callSignalIdleCounter > 8 then
+        nextDelay = 6000
+      end
+    end
+    
+    Handler().postDelayed(Runnable{ run = signalPoll }, nextDelay)
   end
   signalPoll()
 end
@@ -7581,27 +7665,32 @@ function startPollingLoop()
     if not currentUser.online or not isPolling then return end
     
     local now_ts = os.time()
+    local isAppActive = isAppActiveAndScreenOn()
     
-    -- Send heartbeat only once every 35 seconds (90% reduction in data usage!)
-    if now_ts - lastHeartbeatTimestamp >= 35 then
+    -- Heartbeat every 45s (keeps user online without wasting cellular data)
+    if now_ts - lastHeartbeatTimestamp >= 45 then
       lastHeartbeatTimestamp = now_ts
       updateOnlinePresence()
     end
     
-    -- Smart Data-Saving: Poll ONLY the tab the user is actively viewing!
-    if activeTab == "public" then
-      fetchPublicFeedMessages()
-    elseif activeTab == "group_chat" and activeGroup then
-      fetchGroupChatThread(activeGroup.id)
-    elseif activeTab == "private_chat" and activeChatTarget ~= "" then
-      fetchPrivateChatThread(activeChatTarget)
-    elseif activeTab == "private" then
-      fetchOnlineUsersList()
-    elseif activeTab == "lounge" then
-      fetchGroupsList()
+    -- Screen-Off / App-Minimized Protection:
+    -- Pause all active tab feed requests when user is not actively viewing the screen
+    if isAppActive then
+      if activeTab == "public" then
+        fetchPublicFeedMessages()
+      elseif activeTab == "group_chat" and activeGroup then
+        fetchGroupChatThread(activeGroup.id)
+      elseif activeTab == "private_chat" and activeChatTarget ~= "" then
+        fetchPrivateChatThread(activeChatTarget)
+      elseif activeTab == "private" then
+        fetchOnlineUsersList()
+      elseif activeTab == "lounge" then
+        fetchGroupsList()
+      end
     end
     
-    Handler().postDelayed(Runnable{ run = poll }, 5000)
+    local nextTabPollDelay = isAppActive and 5000 or 15000
+    Handler().postDelayed(Runnable{ run = poll }, nextTabPollDelay)
   end
   
   poll()
