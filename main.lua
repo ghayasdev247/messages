@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.6"
-local APP_VERSION_CODE = 82
+local APP_VERSION = "3.14.7"
+local APP_VERSION_CODE = 83
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -4150,53 +4150,125 @@ function updateHomeRecentChatsUI()
 end
 
 function showNewChatUserPickerDialog()
-  announce("Loading contacts and online users...")
-  apiGet("/api/online-users?user=" .. currentUser.name, "data/online_users.json", function(success, data)
-    local userOptions = {}
-    local rawNames = {}
-    
-    table.insert(userOptions, "➕ Enter username manually...")
-    table.insert(rawNames, "__custom__")
-    
-    local addedMap = {}
-    if success and data and type(data) == "table" then
-      for _, u in ipairs(data) do
-        if type(u) == "table" and u.name and u.name ~= currentUser.name then
-          local cleanN = u.name:gsub("^%s+", ""):gsub("%s+$", "")
-          if not addedMap[string.lower(cleanN)] then
-            addedMap[string.lower(cleanN)] = true
-            table.insert(userOptions, "👤 " .. cleanN .. " (🟢 Online)")
-            table.insert(rawNames, cleanN)
+  announce("Loading all registered users and contacts...")
+  
+  local allUsersUrl = FIREBASE_URL .. "/data/all_users.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999))
+  local onlineUsersUrl = FIREBASE_URL .. "/data/online_users.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999))
+  
+  pcall(function()
+    Http.get(allUsersUrl, function(allCode, allContent)
+      Http.get(onlineUsersUrl, function(onCode, onContent)
+        local now_ts = os.time()
+        local onlineMap = {}
+        
+        -- Parse online users
+        if onCode == 200 and onContent and onContent ~= "null" then
+          pcall(function()
+            local onData = decodeJSON(onContent)
+            if onData and type(onData) == "table" then
+              for k, v in pairs(onData) do
+                if type(v) == "table" then
+                  local uname = v.name or v.username
+                  local lastSeen = tonumber(v.last_seen or 0) or 0
+                  if uname and (now_ts - lastSeen <= 60) and (v.status == "Online" or v.online == true) then
+                    local cleanU = string.lower(uname:gsub("^%s+", ""):gsub("%s+$", ""))
+                    onlineMap[cleanU] = true
+                  end
+                end
+              end
+            end
+          end)
+        end
+        
+        local userMap = {}
+        local myClean = string.lower(currentUser.name:gsub("^%s+", ""):gsub("%s+$", ""))
+        
+        -- Parse all registered users
+        if allCode == 200 and allContent and allContent ~= "null" then
+          pcall(function()
+            local allData = decodeJSON(allContent)
+            if allData and type(allData) == "table" then
+              for k, v in pairs(allData) do
+                if type(v) == "table" then
+                  local uname = v.name or v.username or k
+                  if uname and type(uname) == "string" and uname ~= "" then
+                    local cleanN = uname:gsub("^%s+", ""):gsub("%s+$", "")
+                    local lowerN = string.lower(cleanN)
+                    if lowerN ~= myClean then
+                      userMap[lowerN] = {
+                        displayName = cleanN,
+                        isOnline = (onlineMap[lowerN] == true)
+                      }
+                    end
+                  end
+                end
+              end
+            end
+          end)
+        end
+        
+        -- Merge local saved contacts
+        local contacts = (loadPrivateContacts and loadPrivateContacts()) or {}
+        for contactName, _ in pairs(contacts) do
+          if contactName ~= "" then
+            local cleanN = contactName:gsub("^%s+", ""):gsub("%s+$", "")
+            local lowerN = string.lower(cleanN)
+            if lowerN ~= myClean and not userMap[lowerN] then
+              userMap[lowerN] = {
+                displayName = cleanN,
+                isOnline = (onlineMap[lowerN] == true)
+              }
+            end
           end
         end
-      end
-    end
-    
-    local contacts = (loadPrivateContacts and loadPrivateContacts()) or {}
-    for contactName, _ in pairs(contacts) do
-      if contactName ~= "" and contactName ~= currentUser.name and not addedMap[string.lower(contactName)] then
-        addedMap[string.lower(contactName)] = true
-        table.insert(userOptions, "👤 " .. contactName .. " (⚪ Offline)")
-        table.insert(rawNames, contactName)
-      end
-    end
-    
-    local builder = AlertDialog.Builder(activity)
-    builder.setTitle("➕ Start New Chat")
-    builder.setItems(userOptions, DialogInterface.OnClickListener{
-      onClick = function(dialog, which)
-        local chosen = rawNames[which + 1]
-        if chosen == "__custom__" then
-          showManualUsernameInputDialog()
-        elseif chosen then
-          savePrivateContact(chosen)
-          announce("Starting chat with " .. chosen)
-          openPrivateChatScreen(chosen)
+        
+        -- Convert map to list
+        local userList = {}
+        for _, uObj in pairs(userMap) do
+          table.insert(userList, uObj)
         end
-      end
-    })
-    builder.setNegativeButton("Cancel", nil)
-    safeShowDialog(builder)
+        
+        -- Sort: Online first, then alphabetically
+        table.sort(userList, function(a, b)
+          if a.isOnline ~= b.isOnline then
+            return a.isOnline == true
+          end
+          return a.displayName < b.displayName
+        end)
+        
+        local userOptions = {}
+        local rawNames = {}
+        
+        table.insert(userOptions, "➕ Enter username manually...")
+        table.insert(rawNames, "__custom__")
+        
+        for _, u in ipairs(userList) do
+          local statusLabel = u.isOnline and "(🟢 Online)" or "(⚪ Offline)"
+          table.insert(userOptions, "👤 " .. u.displayName .. " " .. statusLabel)
+          table.insert(rawNames, u.displayName)
+        end
+        
+        local count = #userList
+        announce(count .. " users loaded. Select user to start chatting.")
+        
+        local builder = AlertDialog.Builder(activity)
+        builder.setTitle("➕ Start New Chat (" .. count .. " Users)")
+        builder.setItems(userOptions, DialogInterface.OnClickListener{
+          onClick = function(dialog, which)
+            local chosen = rawNames[which + 1]
+            if chosen == "__custom__" then
+              showManualUsernameInputDialog()
+            elseif chosen then
+              savePrivateContact(chosen)
+              announce("Starting chat with " .. chosen)
+              openPrivateChatScreen(chosen)
+            end
+          end
+        })
+        builder.setNegativeButton("Cancel", nil)
+        safeShowDialog(builder)
+      end)
+    end)
   end)
 end
 
@@ -6055,14 +6127,28 @@ function openPrivateChatScreen(targetUsername)
       return
     end
     
+    local now_ts = os.time()
     local payload = {
       sender = currentUser.name,
       recipient = targetUsername,
-      text = text
+      text = text,
+      time = os.date("%I:%M %p"),
+      timestamp = now_ts
     }
     
     editMessageInput.setText("")
-    announce("Sending private message: " .. text)
+    announce("Sending message: " .. text)
+    
+    -- Optimistic instant UI update
+    if not privateChatHistory[targetUsername] then
+      privateChatHistory[targetUsername] = {}
+    end
+    table.insert(privateChatHistory[targetUsername], payload)
+    local chatPath = getChatFilePath(currentUser.name, targetUsername)
+    saveLocalCachedMessages(chatPath, privateChatHistory[targetUsername])
+    savePrivateContact(targetUsername)
+    lastRenderedPrivateCount = #privateChatHistory[targetUsername]
+    updatePrivateChatUI(targetUsername)
     
     apiPost("/api/private-messages", payload, function()
       fetchPrivateChatThread(targetUsername)
@@ -6070,19 +6156,17 @@ function openPrivateChatScreen(targetUsername)
   end
   
   btnBackToPrivateList.onClick = function()
-    local chatPath = getChatFilePath(currentUser.name, targetUsername)
-    purgeCloudFeed(chatPath)
-    purgeEphemeralAudioFiles()
-    privateChatHistory[targetUsername] = nil
     activeChatTarget = ""
     showMainAppContainer()
     switchTab("home")
+    updateHomeRecentChatsUI()
   end
 end
 
 function fetchPrivateChatThread(targetUsername)
+  if not targetUsername or targetUsername == "" then return end
   local chatPath = getChatFilePath(currentUser.name, targetUsername)
-  local endpoint = "/api/private-messages?user=" .. currentUser.name .. "&target=" .. targetUsername
+  local endpoint = "/api/private-messages?user=" .. urlEncode(currentUser.name) .. "&target=" .. urlEncode(targetUsername)
   
   apiGet(endpoint, chatPath, function(success, data)
     if success and data and type(data) == "table" then
@@ -6090,19 +6174,55 @@ function fetchPrivateChatThread(targetUsername)
       local newCount = #sorted
       if newCount > lastPrivateMessageCount and lastPrivateMessageCount > 0 then
         local latest = sorted[newCount]
-        if latest and type(latest) == "table" and latest.sender == targetUsername then
-          announce("New private message from " .. targetUsername .. ": " .. cleanMessageText(latest.text, latest.isVoice))
+        if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
+          announce("New private message from " .. (latest.sender or targetUsername) .. ": " .. cleanMessageText(latest.text, latest.isVoice))
         end
       end
       lastPrivateMessageCount = newCount
       privateChatHistory[targetUsername] = sorted
+      savePrivateContact(targetUsername)
       
       if activeTab == "private_chat" and activeChatTarget == targetUsername and lastRenderedPrivateCount ~= newCount then
         lastRenderedPrivateCount = newCount
         updatePrivateChatUI(targetUsername)
       end
+      
+      if activeTab == "home" then
+        updateHomeRecentChatsUI()
+      end
     end
   end)
+end
+
+function checkRecentPrivateChatsGlobal()
+  if not currentUser.online or not currentUser.name or currentUser.name == "" then return end
+  local contacts = (loadPrivateContacts and loadPrivateContacts()) or {}
+  for contactName, _ in pairs(contacts) do
+    if contactName ~= "" and contactName ~= currentUser.name then
+      local chatPath = getChatFilePath(currentUser.name, contactName)
+      local endpoint = "/api/private-messages?user=" .. urlEncode(currentUser.name) .. "&target=" .. urlEncode(contactName)
+      apiGet(endpoint, chatPath, function(success, data)
+        if success and data and type(data) == "table" and #data > 0 then
+          local prevHistory = privateChatHistory[contactName] or {}
+          local prevCount = #prevHistory
+          local sorted = deduplicateAndSortMessages(data)
+          local newCount = #sorted
+          privateChatHistory[contactName] = sorted
+          
+          if newCount > prevCount and prevCount > 0 then
+            local latest = sorted[newCount]
+            if latest and type(latest) == "table" and latest.sender ~= currentUser.name then
+              announce("New message from " .. contactName .. ": " .. cleanMessageText(latest.text, latest.isVoice))
+            end
+          end
+          
+          if activeTab == "home" then
+            updateHomeRecentChatsUI()
+          end
+        end
+      end)
+    end
+  end
 end
 
 function updatePrivateChatUI(targetUsername)
@@ -7676,7 +7796,9 @@ function startPollingLoop()
     -- Screen-Off / App-Minimized Protection:
     -- Pause all active tab feed requests when user is not actively viewing the screen
     if isAppActive then
-      if activeTab == "public" then
+      if activeTab == "home" then
+        checkRecentPrivateChatsGlobal()
+      elseif activeTab == "public" then
         fetchPublicFeedMessages()
       elseif activeTab == "group_chat" and activeGroup then
         fetchGroupChatThread(activeGroup.id)

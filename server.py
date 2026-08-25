@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.14.6",
-                "version_code": 82,
+                "version": "3.14.7",
+                "version_code": 83,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.14.6: Low-Bandwidth & Network Optimization - Adaptive polling, screen-off throttling, TTL caching, and AMR_NB 12.2kbps compression."
+                "changelog": "Version 3.14.7: Fixed New Chat full user directory display and restored incoming private messages background sync and notifications."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
