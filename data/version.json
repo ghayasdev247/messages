@@ -1,7 +1,7 @@
 {
-  "version": "3.14.4",
-  "version_code": 80,
+  "version": "3.14.5",
+  "version_code": 81,
   "download_url": "https://messages.vistudio247.workers.dev/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.14.4: Fixed WebRTC Voice Audio issue (audio routing and JS SDP parsing)."
+  "changelog": "Version 3.14.5: Fixed Android AsyncTask ThreadPoolExecutor exhaustion and RejectedExecutionException crash."
 }

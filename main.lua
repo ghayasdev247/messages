@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.4"
-local APP_VERSION_CODE = 80
+local APP_VERSION = "3.14.5"
+local APP_VERSION_CODE = 81
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2389,81 +2389,107 @@ function sendWebRTCSignalToFirebase(sigData)
   end)
 end
 
+local isWebRTCPollingInFlight = false
+local lastWebRTCPollStartTime = 0
+
 function startWebRTCSignalingPoll()
-  if not isCallActive or activeCallMode ~= "webrtc" then return end
+  if not isCallActive or activeCallMode ~= "webrtc" then
+    isWebRTCPollingInFlight = false
+    return
+  end
+  
+  if isWebRTCPollingInFlight then
+    if os.time() - lastWebRTCPollStartTime > 8 then
+      isWebRTCPollingInFlight = false
+    else
+      return
+    end
+  end
+  
+  isWebRTCPollingInFlight = true
+  lastWebRTCPollStartTime = os.time()
   
   -- 1. Poll WebRTC Signals from Firebase
   local sigUrl = FIREBASE_URL .. "/data/webrtc_signals/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999))
-  Http.get(sigUrl, function(code, content)
-    if isCallActive and activeCallMode == "webrtc" and code == 200 and content and content ~= "null" then
-      pcall(function()
-        local data = decodeJSON(content)
-        if type(data) == "table" then
-          -- Process Offer
-          if data.offer and type(data.offer) == "table" and data.offer.sender ~= currentUser.name then
-            if not processedSignalKeys["offer"] then
-              processedSignalKeys["offer"] = true
-              if rtcWebView then
-                local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.offer)))
-                rtcWebView.evaluateJavascript(js, nil)
-              end
-            end
-          end
-          -- Process Answer
-          if data.answer and type(data.answer) == "table" and data.answer.sender ~= currentUser.name then
-            if not processedSignalKeys["answer"] then
-              processedSignalKeys["answer"] = true
-              if rtcWebView then
-                local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.answer)))
-                rtcWebView.evaluateJavascript(js, nil)
-              end
-            end
-          end
-          -- Process Candidates
-          if data.candidates and type(data.candidates) == "table" then
-            for cKey, cand in pairs(data.candidates) do
-              if type(cand) == "table" and cand.sender ~= currentUser.name and not processedSignalKeys[cKey] then
-                processedSignalKeys[cKey] = true
+  pcall(function()
+    Http.get(sigUrl, function(code, content)
+      if isCallActive and activeCallMode == "webrtc" and code == 200 and content and content ~= "null" then
+        pcall(function()
+          local data = decodeJSON(content)
+          if type(data) == "table" then
+            -- Process Offer
+            if data.offer and type(data.offer) == "table" and data.offer.sender ~= currentUser.name then
+              if not processedSignalKeys["offer"] then
+                processedSignalKeys["offer"] = true
                 if rtcWebView then
-                  local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(cand)))
+                  local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.offer)))
                   rtcWebView.evaluateJavascript(js, nil)
                 end
               end
             end
-          end
-        end
-      end)
-    end
-  end)
-  
-  -- 2. Poll Room Presence from Firebase (to update participants & mark connected)
-  local roomUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999))
-  Http.get(roomUrl, function(rCode, rContent)
-    if isCallActive and rCode == 200 and rContent and rContent ~= "null" then
-      pcall(function()
-        local roomData = decodeJSON(rContent)
-        if roomData and roomData.participants and type(roomData.participants) == "table" then
-          local parts = {}
-          local pCount = 0
-          for pKey, pInfo in pairs(roomData.participants) do
-            if type(pInfo) == "table" and pInfo.name then
-              table.insert(parts, pInfo)
-              pCount = pCount + 1
+            -- Process Answer
+            if data.answer and type(data.answer) == "table" and data.answer.sender ~= currentUser.name then
+              if not processedSignalKeys["answer"] then
+                processedSignalKeys["answer"] = true
+                if rtcWebView then
+                  local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.answer)))
+                  rtcWebView.evaluateJavascript(js, nil)
+                end
+              end
+            end
+            -- Process Candidates
+            if data.candidates and type(data.candidates) == "table" then
+              for cKey, cand in pairs(data.candidates) do
+                if type(cand) == "table" and cand.sender ~= currentUser.name and not processedSignalKeys[cKey] then
+                  processedSignalKeys[cKey] = true
+                  if rtcWebView then
+                    local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(cand)))
+                    rtcWebView.evaluateJavascript(js, nil)
+                  end
+                end
+              end
             end
           end
-          callParticipants = parts
-          if pCount >= 2 and not activeCallRecipientAccepted then
-            activeCallRecipientAccepted = true
-            announce("Call connected with " .. (activeChatTarget or "User") .. " on WebRTC.")
-          end
-          updateCallParticipantsList()
-        end
-      end)
-    end
-    
-    if isCallActive and activeCallMode == "webrtc" then
-      Handler().postDelayed(Runnable{ run = startWebRTCSignalingPoll }, 700)
-    end
+        end)
+      end
+      
+      -- 2. Poll Room Presence sequentially to prevent ThreadPool queue buildup
+      if isCallActive and activeCallMode == "webrtc" then
+        local roomUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999))
+        pcall(function()
+          Http.get(roomUrl, function(rCode, rContent)
+            isWebRTCPollingInFlight = false
+            if isCallActive and rCode == 200 and rContent and rContent ~= "null" then
+              pcall(function()
+                local roomData = decodeJSON(rContent)
+                if roomData and roomData.participants and type(roomData.participants) == "table" then
+                  local parts = {}
+                  local pCount = 0
+                  for pKey, pInfo in pairs(roomData.participants) do
+                    if type(pInfo) == "table" and pInfo.name then
+                      table.insert(parts, pInfo)
+                      pCount = pCount + 1
+                    end
+                  end
+                  callParticipants = parts
+                  if pCount >= 2 and not activeCallRecipientAccepted then
+                    activeCallRecipientAccepted = true
+                    announce("Call connected with " .. (activeChatTarget or "User") .. " on WebRTC.")
+                  end
+                  updateCallParticipantsList()
+                end
+              end)
+            end
+            
+            if isCallActive and activeCallMode == "webrtc" then
+              Handler().postDelayed(Runnable{ run = startWebRTCSignalingPoll }, 1000)
+            end
+          end)
+        end)
+      else
+        isWebRTCPollingInFlight = false
+      end
+    end)
   end)
 end
 
@@ -2471,6 +2497,8 @@ function leaveActiveVoiceCall()
   if not isCallActive then return end
   isCallActive = false
   isCallChunkTransmitting = false
+  isWebRTCPollingInFlight = false
+  isChunkPollInFlight = false
   
   -- 1. Absolute Kill-Switch for MediaRecorder (Chunks mode)
   pcall(function()
@@ -2984,31 +3012,33 @@ function transmitLiveAudioBurst()
   end
 end
 
+local isChunkPollInFlight = false
+local lastChunkPollStartTime = 0
+
 function pollLiveCallRoomStatus()
-  if not isCallActive then return end
+  if not isCallActive or activeCallMode ~= "chunk" then
+    isChunkPollInFlight = false
+    return
+  end
   
-  local pollDone = false
-  
-  local function scheduleNextPoll()
-    if pollDone then return end
-    pollDone = true
-    if isCallActive then
-      Handler().postDelayed(Runnable{ run = pollLiveCallRoomStatus }, 800)
+  if isChunkPollInFlight then
+    if os.time() - lastChunkPollStartTime > 8 then
+      isChunkPollInFlight = false
+    else
+      return
     end
   end
   
-  -- Watchdog: if Http.get never fires its callback, reschedule anyway after 5 seconds
-  Handler().postDelayed(Runnable{
-    run = function()
-      scheduleNextPoll()
-    end
-  }, 5000)
+  isChunkPollInFlight = true
+  lastChunkPollStartTime = os.time()
   
-  -- Fetch Room Status & Incoming Audio Packets
+  local statusUrl = FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999))
+  
   pcall(function()
-    Http.get(FIREBASE_URL .. "/data/active_calls/" .. activeCallRoomId .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(1000,9999)), function(code, content)
-      pcall(function()
-        if isCallActive and code == 200 and content and content ~= "null" then
+    Http.get(statusUrl, function(code, content)
+      isChunkPollInFlight = false
+      if isCallActive and code == 200 and content and content ~= "null" then
+        pcall(function()
           local data = decodeJSON(content)
           if data and type(data) == "table" then
             if type(data.participants) == "table" then
@@ -3029,14 +3059,14 @@ function pollLiveCallRoomStatus()
               end
             end
           end
-        end
-      end)
+        end)
+      end
       
       -- Check private call signals directly from Firebase
       if isCallActive and activeCallType == "private" then
         pcall(function()
           local myKey = cleanFirebaseKey(currentUser.name)
-          local sigUrl = FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json?t=" .. os.time()
+          local sigUrl = FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(100,999))
           Http.get(sigUrl, function(sigCode, sigContent)
             pcall(function()
               if isCallActive and sigCode == 200 and sigContent and sigContent ~= "null" then
@@ -3063,7 +3093,9 @@ function pollLiveCallRoomStatus()
         end)
       end
       
-      scheduleNextPoll()
+      if isCallActive and activeCallMode == "chunk" then
+        Handler().postDelayed(Runnable{ run = pollLiveCallRoomStatus }, 1000)
+      end
     end)
   end)
 end
@@ -3129,32 +3161,52 @@ end
 
 local isIncomingCallDialogShowing = false
 local incomingCallDialogRef = nil
+local isSignalCheckInFlight = false
+local lastSignalCheckStartTime = 0
 
 function checkIncomingCallSignals()
   if isCallActive or not currentUser.name or currentUser.name == "" then return end
   
-  local myKey = cleanFirebaseKey(currentUser.name)
-  local sigUrl = FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json?t=" .. os.time()
-  
-  Http.get(sigUrl, function(code, content)
-    if code == 200 and content and content ~= "null" then
-      local signal = decodeJSON(content)
-      if signal and type(signal) == "table" then
-        if signal.action == "call" and signal.from ~= currentUser.name then
-          local callerName = signal.from
-          local targetRoom = signal.roomId
-          local callMode = signal.mode or "webrtc"
-          showIncomingCallDialog(callerName, targetRoom, callMode)
-        elseif signal.action == "end" or signal.action == "decline" then
-          if isIncomingCallDialogShowing and incomingCallDialogRef then
-            pcall(function() incomingCallDialogRef.dismiss() end)
-            incomingCallDialogRef = nil
-            isIncomingCallDialogShowing = false
-            announce("Caller ended the call.")
-          end
-        end
-      end
+  -- Prevent concurrent overlapping network requests & thread exhaustion
+  if isSignalCheckInFlight then
+    if os.time() - lastSignalCheckStartTime > 10 then
+      isSignalCheckInFlight = false
+    else
+      return
     end
+  end
+  
+  isSignalCheckInFlight = true
+  lastSignalCheckStartTime = os.time()
+  
+  local myKey = cleanFirebaseKey(currentUser.name)
+  local sigUrl = FIREBASE_URL .. "/data/call_signals/" .. myKey .. ".json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999))
+  
+  pcall(function()
+    Http.get(sigUrl, function(code, content)
+      isSignalCheckInFlight = false
+      if isCallActive then return end
+      if code == 200 and content and content ~= "null" then
+        pcall(function()
+          local signal = decodeJSON(content)
+          if signal and type(signal) == "table" then
+            if signal.action == "call" and signal.from ~= currentUser.name then
+              local callerName = signal.from
+              local targetRoom = signal.roomId
+              local callMode = signal.mode or "webrtc"
+              showIncomingCallDialog(callerName, targetRoom, callMode)
+            elseif signal.action == "end" or signal.action == "decline" then
+              if isIncomingCallDialogShowing and incomingCallDialogRef then
+                pcall(function() incomingCallDialogRef.dismiss() end)
+                incomingCallDialogRef = nil
+                isIncomingCallDialogShowing = false
+                announce("Caller ended the call.")
+              end
+            end
+          end
+        end)
+      end
+    end)
   end)
 end
 
@@ -7513,7 +7565,7 @@ function startFastCallSignalLoop()
     if currentUser.online and not isCallActive then
       checkIncomingCallSignals()
     end
-    Handler().postDelayed(Runnable{ run = signalPoll }, 1500)
+    Handler().postDelayed(Runnable{ run = signalPoll }, 3000)
   end
   signalPoll()
 end
