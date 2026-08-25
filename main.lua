@@ -7780,81 +7780,145 @@ function showSubmitFeedbackDialog()
   safeShowDialog(builder)
 end
 
-function showUserGuideDialog()
-  local guideText = "====================================\n" ..
-                    "ACCESSIBLE MESSENGER USER MANUAL\n" ..
-                    "====================================\n\n" ..
-                    "1. 🎙️ ACCESSIBLE VOICE MESSAGES:\n" ..
-                    "• Tap any voice message once to start listening.\n" ..
-                    "• While playing, tap again to Pause or Resume.\n" ..
-                    "• Use the Seek Slider or the ⏪ -5s and ⏩ +5s buttons to jump forward/backward instantly.\n\n" ..
-                    "2. 🌐 GLOBAL PUBLIC LOBBY:\n" ..
-                    "• All public messages are delivered in real-time.\n" ..
-                    "• Tap '🎙️ Voice' to record and broadcast your voice note to everyone.\n\n" ..
-                    "3. 🚀 COMMUNITY LOUNGE GROUPS:\n" ..
-                    "• Browse and join public groups or create your own topic group.\n" ..
-                    "• Group admins can manage membership approvals inside Group Settings.\n\n" ..
-                    "4. 💬 PRIVATE 1-ON-1 CHATS:\n" ..
-                    "• Tap '➕ New Chat' to browse all registered community members.\n" ..
-                    "• Online users appear first with green indicators.\n" ..
-                    "• Voice notes are saved directly to your device storage.\n\n" ..
-                    "5. ⚡ DATA-SAVER ENGINE:\n" ..
-                    "• Background polling is suspended when you are on Home or Settings, saving 90%+ internet bandwidth."
-
+function showAccessibleListDialog(title, itemsList)
+  local listLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "8dp";
+    backgroundColor = "#FFFFFF";
+    {
+      ListView;
+      id = "accessibleInfoListView";
+      layout_width = "fill";
+      layout_height = "wrap";
+      dividerHeight = "1dp";
+      divider = ColorDrawable(0xFFEEEEEE);
+    };
+  }
+  
+  local itemLayout = {
+    LinearLayout;
+    orientation = "vertical";
+    layout_width = "fill";
+    padding = "14dp";
+    backgroundColor = "#FFFFFF";
+    {
+      TextView;
+      id = "txtAccessibleLine";
+      textSize = "15sp";
+      textColor = "#111111";
+      layout_width = "fill";
+    };
+  }
+  
+  local view, views = loadlayout(listLayout)
+  local listView = (views and views.accessibleInfoListView) or accessibleInfoListView
+  
+  local data = {}
+  for _, it in ipairs(itemsList) do
+    if it and it ~= "" then
+      table.insert(data, {
+        txtAccessibleLine = tostring(it)
+      })
+    end
+  end
+  
+  local adapter = LuaAdapter(activity, data, itemLayout)
+  listView.setAdapter(adapter)
+  listView.onItemClick = function(parent, v, position, id)
+    local selected = data[position + 1]
+    if selected and selected.txtAccessibleLine then
+      announce(selected.txtAccessibleLine)
+    end
+  end
+  
   local builder = AlertDialog.Builder(activity)
-  builder.setTitle("📖 User Guide & Screen Reader Manual")
-  builder.setMessage(guideText)
+  builder.setTitle(title)
+  builder.setView(view)
   builder.setPositiveButton("Close", nil)
   safeShowDialog(builder)
+  announce(title .. ". Swipe through items to read line by line.")
+end
+
+function showUserGuideDialog()
+  local items = {
+    "📖 ACCESSIBLE MESSENGER USER MANUAL",
+    "------------------------------------",
+    "1. 🎙️ ACCESSIBLE VOICE NOTES:",
+    "• Tap any voice message once to start listening.",
+    "• While playing, tap again to Pause or Resume.",
+    "• Use the Seek Slider or ⏪ -5s and ⏩ +5s buttons to jump.",
+    "------------------------------------",
+    "2. 📞 LIVE VOICE CALLS (WEBRTC & CHUNKS):",
+    "• Open any private chat and double tap '📞 Call'.",
+    "• Select 'WebRTC Real-Time' for ultra-low latency live talking.",
+    "• Select 'Media Record Chunks' for low-bandwidth networks.",
+    "• Use '🔇 Mute' to toggle your microphone and '🔊 Speaker' for audio output.",
+    "------------------------------------",
+    "3. 💬 1-ON-1 PRIVATE CHATS:",
+    "• Double tap '➕ New Chat' in the Chats tab.",
+    "• Browse all registered community members with live 🟢 Online and ⚪ Offline indicators.",
+    "• Incoming messages notify you with real-time screen reader speech.",
+    "------------------------------------",
+    "4. 🌐 GLOBAL PUBLIC LOBBY:",
+    "• Worldwide real-time chat room.",
+    "• Tap '🎙️ Voice' to broadcast your message to all users.",
+    "------------------------------------",
+    "5. 🚀 COMMUNITY LOUNGE GROUPS:",
+    "• Discover, join, and create interest-based groups.",
+    "• Group admins can manage member approval requests.",
+    "------------------------------------",
+    "6. ⚡ DATA-SAVER ENGINE:",
+    "• Polling automatically pauses when your screen is off or app is minimized, saving 90%+ battery and data."
+  }
+  showAccessibleListDialog("📖 User Guide (Line by Line)", items)
 end
 
 function showChangelogDialog()
-  local changelogText = "====================================\n" ..
-                        "RELEASE NOTES & CHANGELOG\n" ..
-                        "====================================\n\n" ..
-                        "★ VERSION 3.5.0 (Latest Release):\n" ..
-                        "• Added Help & Feedback Center with direct feature request submission.\n" ..
-                        "• Added Real-Time Server Latency & Speed Diagnostics Meter.\n" ..
-                        "• Added Admin Feedback Inbox with 1-tap private chat reply.\n" ..
-                        "• Added Server Maintenance Mode Controller.\n" ..
-                        "• Added In-App User Guide and Version Changelog.\n\n" ..
-                        "★ VERSION 3.4.0 & 3.4.1:\n" ..
-                        "• Master Ghost Admin Control Panel with secure credentials.\n" ..
-                        "• Forgotten Password View & Reset tool for accounts.\n" ..
-                        "• Timed Ban Engine (10m, 30m, 1h, 24h, Permanent bans).\n" ..
-                        "• IP Address Tracking & Network Firewall.\n\n" ..
-                        "★ VERSION 3.3.0:\n" ..
-                        "• All registered accounts permanently listed in New Chat directory.\n" ..
-                        "• Permanent Public Lobby messages.\n\n" ..
-                        "★ VERSION 3.2.0 & 3.1.0:\n" ..
-                        "• High-Speed Real-Time Cloud Engine integration.\n" ..
-                        "• Native Android JSON engine for 100% crash-free message decoding.\n\n" ..
-                        "★ VERSION 2.7.0 to 3.0.0:\n" ..
-                        "• Accessible Voice Player with 1-tap toggle, seek slider, and jump buttons.\n" ..
-                        "• Data-Saver zero-idle presence engine."
-
-  local builder = AlertDialog.Builder(activity)
-  builder.setTitle("📜 Version Changelog & Release Notes")
-  builder.setMessage(changelogText)
-  builder.setPositiveButton("Close", nil)
-  safeShowDialog(builder)
+  local items = {
+    "📜 VERSION CHANGELOG & RELEASE NOTES",
+    "------------------------------------",
+    "★ VERSION 3.14.8 (Latest Release):",
+    "• WebRTC Voice Audio Fixes: Injected DOM audio element, Base64 bridging, and candidate buffer.",
+    "• Added OpenRelay public TURN relay servers for strict mobile network calling.",
+    "• Fixed New Chat user directory to permanently list all registered members.",
+    "• Added Global Background Sync for incoming private messages with TTS alerts.",
+    "• Added 3-tier GitHub Raw and jsDelivr CDN mirror auto-update engine.",
+    "• Added Line-by-Line Accessible ListView for Help, Guide, and Changelog dialogs.",
+    "------------------------------------",
+    "★ VERSION 3.14.6 & 3.14.5:",
+    "• Fixed AsyncTask thread pool exhaustion (RejectedExecutionException).",
+    "• Added Screen-Off & Minimized app battery saver engine.",
+    "• Low-bandwidth AMR_NB 12.2kbps voice compression.",
+    "------------------------------------",
+    "★ VERSION 3.5.0:",
+    "• Help & Feedback Center with direct Admin ticket submission.",
+    "• Real-Time Server Latency & Speed Diagnostics Meter.",
+    "------------------------------------",
+    "★ VERSION 3.4.0 & 3.4.1:",
+    "• Master Ghost Admin Control Panel with secure credentials.",
+    "• Timed Ban Engine and IP tracking."
+  }
+  showAccessibleListDialog("📜 Version Changelog (Line by Line)", items)
 end
 
 function showAboutDialog()
-  local aboutText = "Accessible Messenger (Chatify for the Blind)\n" ..
-                    "Version: " .. APP_VERSION .. " (Build " .. APP_VERSION_CODE .. ")\n\n" ..
-                    "Designed from the ground up to empower visually impaired and blind users with 100% accessible, high-speed HD voice and text communication.\n\n" ..
-                    "• Fully optimized for Jieshuo, Commentary Screen Reader, TalkBack, NVDA, and JAWS.\n" ..
-                    "• Powered by Secure Real-Time Cloud Infrastructure."
-
-  local builder = AlertDialog.Builder(activity)
-  builder.setTitle("ℹ️ About Accessible Messenger")
-  builder.setMessage(aboutText)
-  builder.setPositiveButton("Close", nil)
-  safeShowDialog(builder)
+  local items = {
+    "ℹ️ ABOUT ACCESSIBLE MESSENGER",
+    "------------------------------------",
+    "App Name: Accessible Messenger (Chatify for the Blind)",
+    "Version: " .. APP_VERSION .. " (Build Code: " .. APP_VERSION_CODE .. ")",
+    "Framework: AndroLua+ on Android",
+    "Purpose: Empower visually impaired users with 100% accessible communication.",
+    "Supported Screen Readers: Jieshuo, Commentary, TalkBack, NVDA, and JAWS.",
+    "Features: WebRTC Calling, Voice Notes, 1-on-1 Chats, Public Lobby, and Lounge Groups.",
+    "Infrastructure: High-Speed Real-Time Cloud Engine",
+    "Developer: Ghayas Dev & Open Accessibility Community"
+  }
+  showAccessibleListDialog("ℹ️ About Accessible Messenger", items)
 end
 
--- --------------------------------------------------------------------
 -- BACKGROUND POLLING LOOP (SMART DATA-SAVING ENGINE)
 -- --------------------------------------------------------------------
 local lastHeartbeatTimestamp = 0

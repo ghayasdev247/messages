@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Accessible Messenger - Universal Web Client (v3.11.3)</title>
+  <title>Accessible Messenger - Universal Web Client (v3.14.8)</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -426,23 +426,76 @@
   // --- ONLINE USERS ---
   async function fetchOnlineUsers() {
     try {
-      const res = await fetch(`${BACKEND_URL}/api/online-users`);
-      if (res.ok) {
-        const data = await res.json();
-        const box = document.getElementById("users-list-box");
-        box.innerHTML = "";
-        (data.users || []).forEach(u => {
-          if (u.name.toLowerCase() === currentUser.name.toLowerCase()) return;
-          const item = document.createElement("div");
-          item.className = "user-list-item";
-          item.tabIndex = 0;
-          item.innerHTML = `<span>👤 ${escapeHtml(u.name)}</span><span style="color:#25d366; font-size:12px;">🟢 Online</span>`;
-          item.onclick = () => openChatWith(u.name);
-          item.onkeypress = (e) => { if (e.key === "Enter") openChatWith(u.name); };
-          box.appendChild(item);
+      const FIREBASE_DB = "https://messages-server-f2a99-default-rtdb.asia-southeast1.firebasedatabase.app";
+      const now_ts = Math.floor(Date.now() / 1000);
+      
+      const [allRes, onRes] = await Promise.all([
+        fetch(`${FIREBASE_DB}/data/all_users.json?t=${Date.now()}`).catch(() => null),
+        fetch(`${FIREBASE_DB}/data/online_users.json?t=${Date.now()}`).catch(() => null)
+      ]);
+
+      const allData = (allRes && allRes.ok) ? await allRes.json() : {};
+      const onData = (onRes && onRes.ok) ? await onRes.json() : {};
+
+      const onlineMap = {};
+      if (onData && typeof onData === "object") {
+        Object.values(onData).forEach(v => {
+          if (v && v.name) {
+            const lastSeen = Number(v.last_seen || 0);
+            if ((now_ts - lastSeen <= 60) && (v.status === "Online" || v.online === true)) {
+              onlineMap[v.name.toLowerCase().trim()] = true;
+            }
+          }
         });
       }
-    } catch(e) {}
+
+      const userMap = {};
+      const myClean = (currentUser.name || "").toLowerCase().trim();
+
+      if (allData && typeof allData === "object") {
+        Object.values(allData).forEach(v => {
+          if (v && v.name) {
+            const clean = v.name.trim();
+            const lower = clean.toLowerCase();
+            if (lower && lower !== myClean) {
+              userMap[lower] = {
+                displayName: clean,
+                isOnline: Boolean(onlineMap[lower])
+              };
+            }
+          }
+        });
+      }
+
+      const userList = Object.values(userMap);
+      userList.sort((a, b) => {
+        if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+        return a.displayName.localeCompare(b.displayName);
+      });
+
+      const box = document.getElementById("users-list-box");
+      box.innerHTML = "";
+      
+      if (userList.length === 0) {
+        box.innerHTML = `<div style="padding:20px; text-align:center; color:#8696a0;">No other users found.</div>`;
+        return;
+      }
+
+      userList.forEach(u => {
+        const item = document.createElement("div");
+        item.className = "user-list-item";
+        item.tabIndex = 0;
+        const statusHtml = u.isOnline 
+          ? `<span style="color:#25d366; font-size:12px;">🟢 Online</span>`
+          : `<span style="color:#8696a0; font-size:12px;">⚪ Offline</span>`;
+        item.innerHTML = `<span>👤 ${escapeHtml(u.displayName)}</span>${statusHtml}`;
+        item.onclick = () => openChatWith(u.displayName);
+        item.onkeypress = (e) => { if (e.key === "Enter") openChatWith(u.displayName); };
+        box.appendChild(item);
+      });
+    } catch(e) {
+      console.error("fetchOnlineUsers error:", e);
+    }
   }
 
   function openChatWith(target) {
@@ -878,6 +931,107 @@
     div.innerText = text || "";
     return div.innerHTML;
   }
+
+  // --- ACCESSIBLE LINE-BY-LINE INFO ENGINE ---
+  const infoData = {
+    guide: [
+      "📖 ACCESSIBLE MESSENGER USER MANUAL",
+      "------------------------------------",
+      "1. 🎙️ ACCESSIBLE VOICE NOTES:",
+      "• Click/tap any voice note to play audio immediately.",
+      "• Use 🎙️ button to record and send voice messages directly.",
+      "------------------------------------",
+      "2. 📞 LIVE VOICE CALLS (WEBRTC & CHUNKS):",
+      "• Open any Private Chat and tap '📞 Voice Call'.",
+      "• High-speed WebRTC real-time voice streaming with ultra-low latency.",
+      "• Integrated OpenRelay TURN servers guarantee seamless connections across networks.",
+      "------------------------------------",
+      "3. 💬 1-ON-1 PRIVATE CHATS:",
+      "• Open Directory tab to view all registered community members.",
+      "• Real-time 🟢 Online and ⚪ Offline indicators show user availability.",
+      "------------------------------------",
+      "4. 🌐 GLOBAL PUBLIC LOBBY:",
+      "• Worldwide real-time chat room.",
+      "• Broadcast text and voice messages to everyone.",
+      "------------------------------------",
+      "5. ⚡ DATA-SAVER ENGINE:",
+      "• Background delta-syncing ensures minimal data usage."
+    ],
+    changelog: [
+      "📜 VERSION CHANGELOG & RELEASE NOTES",
+      "------------------------------------",
+      "★ VERSION 3.14.8 (Latest Release):",
+      "• WebRTC Voice Audio Fixes: Injected DOM audio element, Base64 bridging, and candidate buffer.",
+      "• Added OpenRelay public TURN relay servers for strict network calling.",
+      "• Fixed New Chat user directory to permanently list all registered members.",
+      "• Added Global Background Sync for incoming private messages with TTS alerts.",
+      "• Added 3-tier GitHub Raw and jsDelivr CDN mirror auto-update engine.",
+      "• Added Line-by-Line Accessible ListView for Help, Guide, and Changelog dialogs.",
+      "------------------------------------",
+      "★ VERSION 3.14.6 & 3.14.5:",
+      "• Fixed AsyncTask thread pool exhaustion & Screen-Off battery saver.",
+      "• Low-bandwidth AMR_NB 12.2kbps compression."
+    ],
+    about: [
+      "ℹ️ ABOUT ACCESSIBLE MESSENGER",
+      "------------------------------------",
+      "App Name: Accessible Messenger (Chatify for the Blind)",
+      "Version: 3.14.8 (Build Code: 84)",
+      "Universal Web Client: Fully accessible on all browsers with NVDA, JAWS, VoiceOver & TalkBack.",
+      "Purpose: Empower visually impaired users with accessible real-time communication.",
+      "Infrastructure: High-Speed Real-Time Cloud Engine",
+      "Developer: Ghayas Dev & Open Accessibility Community"
+    ]
+  };
+
+  function openInfoModal(type) {
+    document.getElementById("modal-accessible-info").classList.remove("hidden");
+    renderInfoTab(type || 'guide');
+  }
+
+  function closeInfoModal() {
+    document.getElementById("modal-accessible-info").classList.add("hidden");
+  }
+
+  function renderInfoTab(tabKey) {
+    const list = infoData[tabKey] || infoData.guide;
+    const titles = { guide: "📖 User Guide & Manual", changelog: "📜 Version Changelog", about: "ℹ️ About Accessible Messenger" };
+    document.getElementById("info-modal-title").innerText = titles[tabKey] || "Information";
+    
+    const box = document.getElementById("info-modal-list");
+    box.innerHTML = "";
+    list.forEach((line, idx) => {
+      const item = document.createElement("div");
+      item.style.padding = "8px 10px";
+      item.style.borderBottom = "1px solid #1f2c34";
+      item.style.fontSize = "14px";
+      item.style.color = line.startsWith("★") || line.startsWith("📖") || line.startsWith("📜") || line.startsWith("ℹ️") ? "#25d366" : (line.startsWith("---") ? "#555" : "#e9edef");
+      item.style.fontWeight = line.startsWith("★") || line.includes(":") ? "bold" : "normal";
+      item.tabIndex = 0;
+      item.setAttribute("role", "listitem");
+      item.innerText = line;
+      box.appendChild(item);
+    });
+    box.scrollTop = 0;
+    announce(titles[tabKey] + " loaded. Navigate line by line.");
+  }
+
 </script>
+
+<!-- Accessible Line-by-Line Info Modal -->
+<div id="modal-accessible-info" class="hidden" style="position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center; z-index:99999;">
+  <div style="background:#111b21; border:2px solid #00a884; border-radius:12px; padding:20px; max-width:540px; width:92%; max-height:85vh; display:flex; flex-direction:column;">
+    <h2 id="info-modal-title" style="font-size:18px; color:#25d366; margin-top:0; margin-bottom:12px; text-align:center;">Information</h2>
+    <div style="display:flex; gap:6px; margin-bottom:12px;">
+      <button class="nav-btn" style="background:#202c33; color:#fff; font-size:12px;" onclick="renderInfoTab('guide')">📖 User Guide</button>
+      <button class="nav-btn" style="background:#202c33; color:#fff; font-size:12px;" onclick="renderInfoTab('changelog')">📜 Changelog</button>
+      <button class="nav-btn" style="background:#202c33; color:#fff; font-size:12px;" onclick="renderInfoTab('about')">ℹ️ About</button>
+    </div>
+    <div id="info-modal-list" style="flex:1; overflow-y:auto; border:1px solid #222e35; border-radius:8px; padding:10px; background:#0b141a;" role="list" aria-label="Line by line information content" tabindex="0">
+    </div>
+    <button class="btn-green" style="margin-top:12px;" onclick="closeInfoModal()">Close</button>
+  </div>
+</div>
+
 </body>
 </html>
