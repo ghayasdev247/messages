@@ -21,8 +21,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.14.7"
-local APP_VERSION_CODE = 83
+local APP_VERSION = "3.14.8"
+local APP_VERSION_CODE = 84
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -2224,6 +2224,7 @@ function startWebRTCSession(isCaller)
     import "android.webkit.WebChromeClient"
     import "android.webkit.WebSettings"
     import "android.view.View"
+    import "android.util.Log"
     
     if rtcWebView then
       pcall(function() rtcWebView.destroy() end)
@@ -2244,13 +2245,28 @@ function startWebRTCSession(isCaller)
       onPermissionRequest = function(super, request)
         pcall(function()
           request.grant(request.getResources())
+          Log.d("WebRTC_Lua", "MIC_PERMISSION_GRANTED")
         end)
+      end,
+      onConsoleMessage = function(super, consoleMessage)
+        pcall(function()
+          if consoleMessage then
+            local msg = tostring(consoleMessage.message())
+            Log.d("WebRTC_Lua", msg)
+            if msg:find("^ICE_STATE:") or msg:find("^TRACK_RECEIVED") or msg:find("^AUDIO_PLAYING") or msg:find("^AUTOPLAY_FAILED") or msg:find("^FATAL") then
+              announce("WebRTC: " .. msg)
+            end
+          end
+        end)
+        return true
       end,
       onJsPrompt = function(super, view, url, message, defaultValue, result)
         if message and message:find("^WEBRTC:") then
-          local payloadStr = message:sub(8)
+          local payloadB64 = message:sub(8)
           pcall(function()
-            local sigData = decodeJSON(payloadStr)
+            local rawJson = base64Decode(payloadB64)
+            if not rawJson or rawJson == "" then rawJson = payloadB64 end
+            local sigData = decodeJSON(rawJson)
             if sigData then
               sendWebRTCSignalToFirebase(sigData)
             end
@@ -2267,107 +2283,207 @@ function startWebRTCSession(isCaller)
 <html>
 <head>
 <meta charset="utf-8">
+<style>body { margin:0; padding:0; background:transparent; }</style>
+</head>
+<body>
+<audio id="remoteAudio" autoplay playsinline style="display:none;"></audio>
 <script>
   let pc = null;
   let localStream = null;
   let myRole = '';
   let activeRoom = '';
   let myUser = '';
+  const candidateQueue = [];
 
   const rtcConfig = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      {
+        urls: 'turn:openrelay.metered.ca:80',
+        username: 'openrelay',
+        credential: 'openrelay'
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443',
+        username: 'openrelay',
+        credential: 'openrelay'
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+        username: 'openrelay',
+        credential: 'openrelay'
+      }
     ]
   };
+
+  function sendSignal(obj) {
+    try {
+      const jsonStr = JSON.stringify(obj);
+      const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+      prompt("WEBRTC:" + b64);
+    } catch(e) {
+      console.error("sendSignal error:", e);
+    }
+  }
 
   async function initWebRTC(isCaller, roomId, username) {
     try {
       myRole = isCaller ? 'caller' : 'callee';
       activeRoom = roomId;
       myUser = username;
+      console.log("INIT_WEBRTC: role=" + myRole + " room=" + activeRoom + " user=" + myUser);
 
       localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: false
       });
+      console.log("MIC_ACQUIRED: tracks=" + localStream.getAudioTracks().length);
 
       pc = new RTCPeerConnection(rtcConfig);
+
+      pc.oniceconnectionstatechange = () => {
+        console.log("ICE_STATE:" + pc.iceConnectionState);
+      };
+      pc.onconnectionstatechange = () => {
+        console.log("CONN_STATE:" + pc.connectionState);
+      };
+      pc.onsignalingstatechange = () => {
+        console.log("SIGNAL_STATE:" + pc.signalingState);
+      };
 
       localStream.getTracks().forEach(track => {
         pc.addTrack(track, localStream);
       });
 
       pc.ontrack = (event) => {
-        const audioEl = new Audio();
+        console.log("TRACK_RECEIVED: kind=" + event.track.kind + " streams=" + event.streams.length);
+        let audioEl = document.getElementById("remoteAudio");
+        if (!audioEl) {
+          audioEl = document.createElement("audio");
+          audioEl.id = "remoteAudio";
+          audioEl.autoplay = true;
+          audioEl.playsInline = true;
+          document.body.appendChild(audioEl);
+        }
         audioEl.srcObject = event.streams[0];
-        audioEl.autoplay = true;
-        audioEl.play().catch(e => console.error("Audio play error:", e));
+        const playPromise = audioEl.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => console.log("AUDIO_PLAYING: Autoplay succeeded"))
+            .catch(err => console.error("AUTOPLAY_FAILED: " + err));
+        }
       };
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          prompt("WEBRTC:" + JSON.stringify({
+          sendSignal({
             type: "candidate",
             candidate: event.candidate,
             sender: myUser,
             room: activeRoom
-          }));
+          });
         }
       };
 
       if (isCaller) {
+        console.log("CREATING_OFFER...");
         const offer = await pc.createOffer({ offerToReceiveAudio: 1 });
         await pc.setLocalDescription(offer);
-        prompt("WEBRTC:" + JSON.stringify({
+        console.log("OFFER_CREATED_AND_SET_LOCAL");
+        sendSignal({
           type: "offer",
           sdp: offer,
           sender: myUser,
           room: activeRoom
-        }));
+        });
       }
     } catch(err) {
-      console.error("WebRTC Init Failed:", err);
+      console.error("FATAL_INIT_ERROR: " + err);
     }
   }
 
-  async function receiveSignal(rawSignal) {
-    if (!pc) return;
+  async function processCandidateQueue() {
+    if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) return;
+    while (candidateQueue.length > 0) {
+      const cand = candidateQueue.shift();
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(cand));
+        console.log("QUEUED_CANDIDATE_APPLIED");
+      } catch(e) {
+        console.error("APPLY_QUEUED_CANDIDATE_ERROR: " + e);
+      }
+    }
+  }
+
+  async function receiveSignalB64(b64Str) {
+    if (!pc) {
+      console.error("RECV_SIGNAL_NO_PC");
+      return;
+    }
     try {
-      const data = typeof rawSignal === 'string' ? JSON.parse(rawSignal) : rawSignal;
+      const jsonStr = decodeURIComponent(escape(atob(b64Str)));
+      const data = JSON.parse(jsonStr);
       if (!data || data.sender === myUser) return;
 
+      console.log("SIGNAL_RECV: type=" + data.type + " from=" + data.sender);
+
       if (data.type === 'offer' && myRole !== 'caller') {
+        console.log("SETTING_REMOTE_OFFER...");
         await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        await processCandidateQueue();
+        
+        console.log("CREATING_ANSWER...");
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        prompt("WEBRTC:" + JSON.stringify({
+        console.log("ANSWER_CREATED_AND_SET_LOCAL");
+        
+        sendSignal({
           type: "answer",
           sdp: answer,
           sender: myUser,
           room: activeRoom
-        }));
+        });
       } else if (data.type === 'answer') {
         if (pc.signalingState === "have-local-offer") {
+          console.log("SETTING_REMOTE_ANSWER...");
           await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+          await processCandidateQueue();
+          console.log("REMOTE_ANSWER_SET_SUCCESS");
         }
       } else if (data.type === 'candidate' && data.candidate) {
-        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        if (!pc.remoteDescription || !pc.remoteDescription.type) {
+          console.log("QUEUEING_ICE_CANDIDATE (remoteDescription not set yet)");
+          candidateQueue.push(data.candidate);
+        } else {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            console.log("ICE_CANDIDATE_APPLIED");
+          } catch(err) {
+            console.error("ADD_ICE_ERROR: " + err);
+          }
+        }
       }
     } catch(e) {
-      console.error("Receive Signal Error:", e);
+      console.error("FATAL_RECEIVE_SIGNAL_ERROR: " + e);
     }
   }
 
   function setMute(muted) {
     if (localStream) {
       localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
+      console.log("MIC_MUTE_STATE: " + muted);
     }
   }
 
   function stopCall() {
+    console.log("STOPPING_CALL...");
     if (localStream) {
       localStream.getTracks().forEach(t => { t.stop(); });
       localStream = null;
@@ -2376,10 +2492,14 @@ function startWebRTCSession(isCaller)
       pc.close();
       pc = null;
     }
+    const audioEl = document.getElementById("remoteAudio");
+    if (audioEl) {
+      audioEl.srcObject = null;
+      audioEl.pause();
+    }
   }
 </script>
-</head>
-<body></body>
+</body>
 </html>
 ]]
 
@@ -2392,13 +2512,13 @@ function startWebRTCSession(isCaller)
             local jsCall = string.format("initWebRTC(%s, '%s', '%s');",
               isCaller and "true" or "false",
               activeCallRoomId,
-              currentUser.name:gsub("'", "\'")
+              currentUser.name:gsub("'", "\\'")
             )
             rtcWebView.evaluateJavascript(jsCall, nil)
           end
         end)
       end
-    }, 500)
+    }, 600)
   end)
   
   -- Duration ticker loop
@@ -2467,34 +2587,34 @@ function startWebRTCSignalingPoll()
         pcall(function()
           local data = decodeJSON(content)
           if type(data) == "table" then
-            -- Process Offer
+            -- Process Offer via Base64
             if data.offer and type(data.offer) == "table" and data.offer.sender ~= currentUser.name then
               if not processedSignalKeys["offer"] then
                 processedSignalKeys["offer"] = true
                 if rtcWebView then
-                  local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.offer)))
-                  rtcWebView.evaluateJavascript(js, nil)
+                  local b64 = base64Encode(encodeJSON(data.offer))
+                  rtcWebView.evaluateJavascript("receiveSignalB64('" .. b64 .. "');", nil)
                 end
               end
             end
-            -- Process Answer
+            -- Process Answer via Base64
             if data.answer and type(data.answer) == "table" and data.answer.sender ~= currentUser.name then
               if not processedSignalKeys["answer"] then
                 processedSignalKeys["answer"] = true
                 if rtcWebView then
-                  local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(data.answer)))
-                  rtcWebView.evaluateJavascript(js, nil)
+                  local b64 = base64Encode(encodeJSON(data.answer))
+                  rtcWebView.evaluateJavascript("receiveSignalB64('" .. b64 .. "');", nil)
                 end
               end
             end
-            -- Process Candidates
+            -- Process Candidates via Base64
             if data.candidates and type(data.candidates) == "table" then
               for cKey, cand in pairs(data.candidates) do
                 if type(cand) == "table" and cand.sender ~= currentUser.name and not processedSignalKeys[cKey] then
                   processedSignalKeys[cKey] = true
                   if rtcWebView then
-                    local js = string.format("receiveSignal('%s');", escapeForJS(encodeJSON(cand)))
-                    rtcWebView.evaluateJavascript(js, nil)
+                    local b64 = base64Encode(encodeJSON(cand))
+                    rtcWebView.evaluateJavascript("receiveSignalB64('" .. b64 .. "');", nil)
                   end
                 end
               end

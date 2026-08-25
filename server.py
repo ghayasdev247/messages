@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.14.7",
-                "version_code": 83,
+                "version": "3.14.8",
+                "version_code": 84,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.14.7: Fixed New Chat full user directory display and restored incoming private messages background sync and notifications."
+                "changelog": "Version 3.14.8: Complete WebRTC Voice Audio Engine Fixes - Base64 bridging, DOM audio autoplay element, candidate queue, and public TURN relay servers."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))
