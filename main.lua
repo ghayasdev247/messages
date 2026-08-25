@@ -640,30 +640,37 @@ function checkForRemoteUpdates(manualCheck)
     announce("Checking for updates...")
   end
   
-  local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
-  Http.get(checkUrl, function(code, content)
-    if code == 200 then
-      local manifest = decodeJSON(content)
-      if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
-        showUpdateAvailableDialog(manifest)
-        return
-      end
-    end
-    
-    Http.get(BACKEND_URL .. "/api/version", function(lCode, lContent)
-      if lCode == 200 then
-        local manifest = decodeJSON(lContent)
-        if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
-          showUpdateAvailableDialog(manifest)
-          return
-        end
-      end
-      
+  local manifestEndpoints = {
+    FIREBASE_URL .. "/data/version.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999)),
+    "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999)),
+    "https://cdn.jsdelivr.net/gh/ghayasdev247/messages@main/data/version.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999))
+  }
+  
+  local function queryManifest(idx)
+    if idx > #manifestEndpoints then
       if manualCheck then
         announce("You are using the latest version of Accessible Messenger (v" .. APP_VERSION .. ").")
       end
+      return
+    end
+    
+    pcall(function()
+      Http.get(manifestEndpoints[idx], function(code, content)
+        if code == 200 and content and content ~= "" and content ~= "null" then
+          pcall(function()
+            local manifest = decodeJSON(content)
+            if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
+              showUpdateAvailableDialog(manifest)
+              return
+            end
+          end)
+        end
+        queryManifest(idx + 1)
+      end)
     end)
-  end)
+  end
+  
+  queryManifest(1)
 end
 
 function showUpdateAvailableDialog(manifest)
@@ -3530,21 +3537,35 @@ function showSplashScreen()
     end
   end
   
-  -- Fast non-blocking update check
-  local checkUrl = VERSION_MANIFEST_URL .. "?t=" .. os.time()
-  Http.get(checkUrl, function(code, content)
+  -- Fast real-time update check via Firebase RTDB (0-latency, no caching)
+  local splashManifestUrls = {
+    FIREBASE_URL .. "/data/version.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999)),
+    "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json?t=" .. tostring(os.time()) .. tostring(math.random(100, 999))
+  }
+  
+  local function checkSplashUpdate(idx)
     if hasProceededFromSplash then return end
-    if code == 200 then
-      local manifest = decodeJSON(content)
-      if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
-        showUpdateAvailableDialog(manifest)
-        return
-      end
+    if idx > #splashManifestUrls then
+      proceedAfterSplash()
+      return
     end
     
-    -- If no update detected, proceed immediately without waiting
-    proceedAfterSplash()
-  end)
+    pcall(function()
+      Http.get(splashManifestUrls[idx], function(code, content)
+        if hasProceededFromSplash then return end
+        if code == 200 and content and content ~= "" and content ~= "null" then
+          local manifest = decodeJSON(content)
+          if manifest and manifest.version_code and (tonumber(manifest.version_code) or 1) > APP_VERSION_CODE then
+            showUpdateAvailableDialog(manifest)
+            return
+          end
+        end
+        checkSplashUpdate(idx + 1)
+      end)
+    end)
+  end
+  
+  checkSplashUpdate(1)
 end
 
 function proceedAfterSplash()
