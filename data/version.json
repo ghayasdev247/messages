@@ -1,7 +1,7 @@
 {
-  "version": "3.15.0",
-  "version_code": 85,
+  "version": "3.15.1",
+  "version_code": 86,
   "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
-  "changelog": "Version 3.15.0: Line-by-Line Accessible Screen Reader ListView for Help, User Guide, and Changelog, plus Universal Web Client upgrade."
+  "changelog": "Version 3.15.1: Fixed ColorDrawable nil value crash in Accessible Screen Reader ListView dialogs."
 }

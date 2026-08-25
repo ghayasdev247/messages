@@ -242,10 +242,10 @@ class RequestHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/version":
             version_data = {
                 "success": True,
-                "version": "3.15.0",
-                "version_code": 85,
+                "version": "3.15.1",
+                "version_code": 86,
                 "download_url": "/api/download-lua",
-                "changelog": "Version 3.15.0: Line-by-Line Accessible Screen Reader ListView for Help, User Guide, and Changelog, plus Universal Web Client upgrade."
+                "changelog": "Version 3.15.1: Fixed ColorDrawable nil value crash in Accessible Screen Reader ListView dialogs."
             }
             self._set_headers(200)
             self.wfile.write(json.dumps(version_data).encode("utf-8"))

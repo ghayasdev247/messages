@@ -13,6 +13,7 @@ import "android.widget.*"
 import "android.view.*"
 import "android.graphics.*"
 import "android.graphics.Typeface"
+import "android.graphics.drawable.*"
 import "android.text.InputType"
 import "android.content.Context"
 import "android.content.DialogInterface"
@@ -21,8 +22,8 @@ import "java.io.File"
 -- --------------------------------------------------------------------
 -- CONFIGURATION & GLOBAL STATE
 -- --------------------------------------------------------------------
-local APP_VERSION = "3.15.0"
-local APP_VERSION_CODE = 85
+local APP_VERSION = "3.15.1"
+local APP_VERSION_CODE = 86
 
 local VERSION_MANIFEST_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/data/version.json"
 local LUA_UPDATE_URL = "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua"
@@ -7814,7 +7815,6 @@ function showAccessibleListDialog(title, itemsList)
       layout_width = "fill";
       layout_height = "wrap";
       dividerHeight = "1dp";
-      divider = ColorDrawable(0xFFEEEEEE);
     };
   }
   
