@@ -1,7 +1,7 @@
 {
   "version": "3.14.8",
   "version_code": 84,
-  "download_url": "https://messages.vistudio247.workers.dev/main.lua",
+  "download_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
   "xpk_url": "https://raw.githubusercontent.com/ghayasdev247/messages/main/Chatify%20Accessible%20Messenger%20for%20the%20Blind_Updated.xpk",
   "changelog": "Version 3.14.8: Complete WebRTC Voice Audio Engine Fixes - Base64 bridging, DOM audio autoplay element, candidate queue, and public TURN relay servers."
 }

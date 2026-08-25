@@ -742,24 +742,42 @@ function showDownloadProgressScreen(versionStr, downloadUrl)
   activity.setContentView(loadlayout(downloadLayout))
   announce("Downloading update Version " .. versionStr .. " in background. Please wait...")
 
-  Http.get(downloadUrl .. "?t=" .. os.time(), function(uCode, uContent)
-    if uCode == 200 and uContent and uContent ~= "" then
-      saveUpdateFile(versionStr, uContent)
-      if txtDownloadStatus then
-        txtDownloadStatus.setText("✅ Update Finished!\nVersion " .. versionStr .. " updated directly in Jieshuo plugin.\nPlease restart the tool to apply the new update.")
-      end
-      if btnContinueAfterUpdate then
-        btnContinueAfterUpdate.setVisibility(View.VISIBLE)
-        btnContinueAfterUpdate.onClick = function()
-          proceedAfterSplash()
-        end
-      end
-      announce("Update Finished! Version " .. versionStr .. " saved to plugin directory. Please restart tool.")
-    else
-      announce("Update download failed. Continuing to messenger.")
+  local fallbackUrls = {
+    downloadUrl,
+    "https://raw.githubusercontent.com/ghayasdev247/messages/main/main.lua",
+    "https://cdn.jsdelivr.net/gh/ghayasdev247/messages@main/main.lua"
+  }
+  
+  local function tryDownload(index)
+    if index > #fallbackUrls then
+      announce("Update download failed on all mirrors. Continuing to messenger.")
       proceedAfterSplash()
+      return
     end
-  end)
+    
+    local targetUrl = fallbackUrls[index] .. "?t=" .. tostring(os.time()) .. tostring(math.random(100, 999))
+    pcall(function()
+      Http.get(targetUrl, function(uCode, uContent)
+        if uCode == 200 and uContent and #uContent > 1000 then
+          saveUpdateFile(versionStr, uContent)
+          if txtDownloadStatus then
+            txtDownloadStatus.setText("✅ Update Finished!\nVersion " .. versionStr .. " updated directly in Jieshuo plugin.\nPlease restart the tool to apply the new update.")
+          end
+          if btnContinueAfterUpdate then
+            btnContinueAfterUpdate.setVisibility(View.VISIBLE)
+            btnContinueAfterUpdate.onClick = function()
+              proceedAfterSplash()
+            end
+          end
+          announce("Update Finished! Version " .. versionStr .. " saved to plugin directory. Please restart tool.")
+        else
+          tryDownload(index + 1)
+        end
+      end)
+    end)
+  end
+  
+  tryDownload(1)
 end
 
 function saveUpdateFile(versionStr, uContent)
